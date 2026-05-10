@@ -639,75 +639,41 @@ describe('SettingsPage', () => {
     expect(screen.getByRole('button', { name: '导入 .env' })).toBeInTheDocument();
   });
 
-  it('disables env backup actions when web auth is not enabled in config', async () => {
-    const baseState = buildSystemConfigState();
+  it('disables env backup actions when web auth is not enabled', () => {
     useAuthMock.mockReturnValue({
       authEnabled: false,
+      passwordChangeable: false,
+      refreshStatus,
+    });
+
+    render(<SettingsPage />);
+
+    expect(screen.getByText(/当前 Web 端未开启管理员鉴权/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '导出 .env' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '导入 .env' })).toBeDisabled();
+  });
+
+  it('uses live auth state for env backup availability instead of loaded config items', () => {
+    const configState = buildSystemConfigState();
+    useSystemConfigMock.mockReturnValue(buildSystemConfigState({
+      itemsByCategory: {
+        ...configState.itemsByCategory,
+        system: configState.itemsByCategory.system.map((item) => (
+          item.key === 'ADMIN_AUTH_ENABLED' ? { ...item, value: 'false' } : item
+        )),
+      },
+    }));
+    useAuthMock.mockReturnValue({
+      authEnabled: true,
       passwordChangeable: true,
       refreshStatus,
     });
-    useSystemConfigMock.mockReturnValue({
-      ...baseState,
-      itemsByCategory: {
-        ...baseState.itemsByCategory,
-        system: [
-          {
-            ...baseState.itemsByCategory.system[0],
-            value: 'false',
-          },
-        ],
-      },
-    });
 
     render(<SettingsPage />);
 
-    const exportButton = screen.getByRole('button', { name: '导出 .env' });
-    const importButton = screen.getByRole('button', { name: '导入 .env' });
-
-    expect(await screen.findByText(/当前 Web 端未开启管理员鉴权/)).toBeInTheDocument();
-    expect(exportButton).toBeDisabled();
-    expect(importButton).toBeDisabled();
-  });
-
-  it('still enables env backup actions when ADMIN_AUTH_ENABLED is outside system category', async () => {
-    const baseState = buildSystemConfigState();
-    useSystemConfigMock.mockReturnValue({
-      ...baseState,
-      itemsByCategory: {
-        ...baseState.itemsByCategory,
-        system: [],
-        base: [
-          ...baseState.itemsByCategory.base,
-          {
-            key: 'ADMIN_AUTH_ENABLED',
-            value: 'true',
-            rawValueExists: true,
-            isMasked: false,
-            schema: {
-              key: 'ADMIN_AUTH_ENABLED',
-              category: 'base',
-              dataType: 'string',
-              uiControl: 'text',
-              isSensitive: false,
-              isRequired: false,
-              isEditable: true,
-              options: [],
-              validation: {},
-              displayOrder: 2,
-            },
-          },
-        ],
-      },
-    });
-
-    render(<SettingsPage />);
-
-    const exportButton = await screen.findByRole('button', { name: '导出 .env' });
-    const importButton = screen.getByRole('button', { name: '导入 .env' });
-
-    expect(exportButton).not.toBeDisabled();
-    expect(importButton).not.toBeDisabled();
     expect(screen.queryByText(/当前 Web 端未开启管理员鉴权/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '导出 .env' })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: '导入 .env' })).not.toBeDisabled();
   });
 
   it('exports saved env from config backup actions', async () => {

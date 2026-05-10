@@ -140,7 +140,7 @@ function formatEnvBackupFilename(isDesktopRuntime: boolean) {
 }
 
 const SettingsPage: React.FC = () => {
-  const { passwordChangeable } = useAuth();
+  const { authEnabled, passwordChangeable } = useAuth();
   const [envBackupActionError, setEnvBackupActionError] = useState<ParsedApiError | null>(null);
   const [envBackupActionSuccess, setEnvBackupActionSuccess] = useState<string>('');
   const [isExportingEnv, setIsExportingEnv] = useState(false);
@@ -251,9 +251,6 @@ const SettingsPage: React.FC = () => {
 
   const rawActiveItems = itemsByCategory[activeCategory] || [];
   const rawActiveItemMap = new Map(rawActiveItems.map((item) => [item.key, String(item.value ?? '')]));
-  const isAdminAuthEnabledInConfig = Object.values(itemsByCategory).some((items) =>
-    items.some((item) => item.key === 'ADMIN_AUTH_ENABLED' && String(item.value ?? '').trim().toLowerCase() === 'true')
-  );
   const hasConfiguredChannels = Boolean((rawActiveItemMap.get('LLM_CHANNELS') || '').trim());
   const hasLitellmConfig = Boolean((rawActiveItemMap.get('LITELLM_CONFIG') || '').trim());
 
@@ -307,7 +304,7 @@ const SettingsPage: React.FC = () => {
       : activeCategory === 'agent'
         ? rawActiveItems.filter((item) => !AGENT_HIDDEN_KEYS.has(item.key))
       : rawActiveItems;
-  const isEnvBackupAllowed = isDesktopRuntime || isAdminAuthEnabledInConfig;
+  const isEnvBackupAllowed = isDesktopRuntime || authEnabled;
   const envBackupActionDisabled = isLoading || isSaving || isExportingEnv || isImportingEnv || !isEnvBackupAllowed;
 
   const downloadEnvBackup = async () => {

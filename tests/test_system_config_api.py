@@ -83,8 +83,10 @@ class SystemConfigApiTestCase(unittest.TestCase):
         self.temp_dir.cleanup()
 
     @staticmethod
-    def _build_request() -> SimpleNamespace:
-        return SimpleNamespace(cookies={"dsa_session": "valid-session-token"})
+    def _build_request(cookies: dict[str, str] | None = None) -> SimpleNamespace:
+        return SimpleNamespace(
+            cookies=cookies if cookies is not None else {system_config.COOKIE_NAME: "valid-session-token"}
+        )
 
     def _build_client_app(self) -> FastAPI:
         app = FastAPI()
@@ -390,6 +392,32 @@ class SystemConfigApiTestCase(unittest.TestCase):
                     service=self.service,
                 )
             self.assertEqual(import_ctx.exception.status_code, 403)
+            self.assertEqual(import_ctx.exception.detail["error"], "env_backup_access_denied")
+
+    def test_config_env_endpoints_require_valid_admin_session(self) -> None:
+        with (
+            patch.dict(os.environ, {"DSA_DESKTOP_MODE": "false"}, clear=False),
+            patch.object(system_config, "verify_session", return_value=False),
+        ):
+            current = system_config.get_system_config(include_schema=False, service=self.service).model_dump()
+            invalid_request = self._build_request({system_config.COOKIE_NAME: "invalid-session"})
+
+            with self.assertRaises(HTTPException) as export_ctx:
+                system_config.export_system_config(request=invalid_request, service=self.service)
+            self.assertEqual(export_ctx.exception.status_code, 401)
+            self.assertEqual(export_ctx.exception.detail["error"], "env_backup_access_denied")
+
+            with self.assertRaises(HTTPException) as import_ctx:
+                system_config.import_system_config(
+                    request_obj=invalid_request,
+                    request=ImportSystemConfigRequest(
+                        config_version=current["config_version"],
+                        content="STOCK_LIST=300750\n",
+                        reload_now=False,
+                    ),
+                    service=self.service,
+                )
+            self.assertEqual(import_ctx.exception.status_code, 401)
             self.assertEqual(import_ctx.exception.detail["error"], "env_backup_access_denied")
 
     def test_config_env_endpoints_require_explicit_true_for_desktop_bypass(self) -> None:

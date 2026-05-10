@@ -41,23 +41,49 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+class EnvBackupAccessDenied(Exception):
+    """Raised when raw `.env` backup access is not allowed for this request."""
+
+    def __init__(self, *, status_code: int, message: str) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.message = message
+
+
 def _allow_env_backup_access(request: Request) -> None:
     """Gate raw .env backup/restore to explicit secure modes.
 
     - Desktop runtime keeps existing local behavior via DSA_DESKTOP_MODE.
-    - Non-desktop runtime must be explicitly enabled via admin auth.
+    - Non-desktop runtime must have admin auth enabled and a valid session.
     """
     if os.getenv("DSA_DESKTOP_MODE") == "true":
         return
 
     refresh_auth_state()
-    if is_auth_enabled():
-        cookie_val = request.cookies.get(COOKIE_NAME)
-        if not (cookie_val and verify_session(cookie_val)):
-            raise PermissionError("System configuration backup requires a valid admin session")
+    if not is_auth_enabled():
+        raise EnvBackupAccessDenied(
+            status_code=403,
+            message="System config backup is disabled; enable admin authentication first",
+        )
+
+    cookie_val = request.cookies.get(COOKIE_NAME)
+    if cookie_val and verify_session(cookie_val):
         return
 
-    raise PermissionError("env_backup_access_disabled")
+    raise EnvBackupAccessDenied(
+        status_code=401,
+        message="System config backup requires a valid admin session",
+    )
+
+
+def _raise_env_backup_access_error(exc: EnvBackupAccessDenied) -> None:
+    raise HTTPException(
+        status_code=exc.status_code,
+        detail={
+            "error": "env_backup_access_denied",
+            "message": exc.message,
+        },
+    )
 
 
 @router.get(
@@ -192,23 +218,9 @@ def export_system_config(
     """Export the active `.env` file for config backup."""
     try:
         _allow_env_backup_access(request)
-    except PermissionError as exc:
+    except EnvBackupAccessDenied as exc:
         logger.warning("System config export blocked: %s", exc)
-        if str(exc) == "env_backup_access_disabled":
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "error": "env_backup_access_denied",
-                    "message": "System config backup is disabled; enable admin authentication first",
-                },
-            )
-        raise HTTPException(
-            status_code=401,
-            detail={
-                "error": "env_backup_access_denied",
-                "message": "System config backup requires a valid admin session",
-            },
-        )
+        _raise_env_backup_access_error(exc)
 
     try:
         payload = service.export_env()
@@ -243,8 +255,8 @@ def export_system_config(
             },
         },
         401: {"description": "Unauthorized", "model": ErrorResponse},
-        409: {"description": "Version conflict", "model": SystemConfigConflictResponse},
         403: {"description": "Env backup disabled", "model": ErrorResponse},
+        409: {"description": "Version conflict", "model": SystemConfigConflictResponse},
         500: {"description": "Internal server error", "model": ErrorResponse},
     },
     summary="Import env backup",
@@ -258,23 +270,9 @@ def import_system_config(
     """Import a `.env` backup into the active config."""
     try:
         _allow_env_backup_access(request_obj)
-    except PermissionError as exc:
+    except EnvBackupAccessDenied as exc:
         logger.warning("System config import blocked: %s", exc)
-        if str(exc) == "env_backup_access_disabled":
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "error": "env_backup_access_denied",
-                    "message": "System config backup is disabled; enable admin authentication first",
-                },
-            )
-        raise HTTPException(
-            status_code=401,
-            detail={
-                "error": "env_backup_access_denied",
-                "message": "System config backup requires a valid admin session",
-            },
-        )
+        _raise_env_backup_access_error(exc)
 
     try:
         payload = service.import_env(
