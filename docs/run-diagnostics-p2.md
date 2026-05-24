@@ -53,7 +53,7 @@ GET /api/v1/history/{record_id}/diagnostics
 - 已有自动化静态告警“可能涉及模型/provider/Base URL 变更”是**误报**。本轮仅新增 `RunDiagnosticContext` 记录与聚合逻辑，没有新增或修改 `src/config.py` 的运行时清理/重载路径，也没有改写 `Config` 对象上的 `litellm_model`、`agent_litellm_model`、`openai_base_url`、Channel `LLM_*` 等配置字段。
 - 兼容性证据如下：
   - 代码层：`src/core/pipeline.py` 与 `src/services/analysis_service.py` 仅记录诊断证据，不改写 LLM 运行时配置；`src/agent/factory.py` 的 `_coerce_config_int` 仅用于 `agent_*` 数值参数的容错兜底。
-  - 回归覆盖：新增/更新测试 `tests/test_agent_pipeline.py::TestAgentConfig::test_build_agent_executor_does_not_mutate_llm_route_config`，明确断言 factory 仅转换数值参数、不修改已提供的模型与 Base URL 配置。
+  - 回归覆盖：新增/更新测试 `tests/test_agent_pipeline.py::TestAgentConfig::test_build_agent_executor_does_not_mutate_llm_route_config` 与 `tests/test_agent_pipeline.py::TestAgentConfig::test_build_agent_executor_multi_arch_does_not_mutate_llm_route_config`，明确断言 factory 仅转换数值参数，不修改已提供的模型与 Base URL 配置。
   - 回退路径：如需恢复到旧行为，移除本轮相关 PR 或将 `diag_*` 相关记录字段从 `context_snapshot`/`RunDiagnosticSummary` 反序列化链路中移除即可，主链路与模型/provider 配置无需额外迁移。
 
 ## 验证建议
