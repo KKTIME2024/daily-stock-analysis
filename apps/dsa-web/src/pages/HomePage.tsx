@@ -802,7 +802,7 @@ const HomePage: React.FC = () => {
                 <DashboardStateBlock title="加载报告中..." loading />
               </div>
             ) : selectedReport ? (
-              <div className={isHistoryTrendOpen ? 'max-w-[78rem] space-y-4 pb-8' : 'max-w-4xl space-y-4 pb-8'}>
+              <div className={isHistoryTrendOpen ? 'max-w-6xl space-y-4 pb-8' : 'max-w-4xl space-y-4 pb-8'}>
                 <div className="flex flex-wrap items-center justify-end gap-2">
                   <Button
                     variant="home-action-ai"
@@ -854,28 +854,26 @@ const HomePage: React.FC = () => {
                     {reportText.fullReport}
                   </Button>
                 </div>
-                <ReportSummary
-                  data={selectedReport}
-                  isHistory
-                  railContent={isHistoryTrendOpen ? (
-                    <StockHistoryTrendDrawer
-                      key={`stock-history-${selectedReport.meta.id}`}
-                      report={selectedReport}
-                      items={stockHistoryItems}
-                      total={stockHistoryTotal}
-                      hasMore={stockHistoryHasMore}
-                      isLoading={isLoadingStockHistory}
-                      isLoadingMore={isLoadingMoreStockHistory}
-                      error={stockHistoryError}
-                      filters={stockHistoryFilters}
-                      onClose={closeHistoryTrend}
-                      onRangeChange={(range) => void setStockHistoryRange(range)}
-                      onLoadMore={() => void loadMoreStockHistory()}
-                      onSelectRecord={(recordId) => void selectHistoryItem(recordId)}
-                      onRetry={() => void openHistoryTrend()}
-                    />
-                  ) : undefined}
-                />
+                {isHistoryTrendOpen ? (
+                  <StockHistoryTrendDrawer
+                    key={`stock-history-${selectedReport.meta.id}`}
+                    report={selectedReport}
+                    items={stockHistoryItems}
+                    total={stockHistoryTotal}
+                    hasMore={stockHistoryHasMore}
+                    isLoading={isLoadingStockHistory}
+                    isLoadingMore={isLoadingMoreStockHistory}
+                    error={stockHistoryError}
+                    filters={stockHistoryFilters}
+                    onClose={closeHistoryTrend}
+                    onRangeChange={(range) => void setStockHistoryRange(range)}
+                    onLoadMore={() => void loadMoreStockHistory()}
+                    onSelectRecord={(recordId) => void selectHistoryItem(recordId)}
+                    onRetry={() => void openHistoryTrend()}
+                  />
+                ) : (
+                  <ReportSummary data={selectedReport} isHistory />
+                )}
               </div>
             ) : (
               <div className="flex h-full items-center justify-center">

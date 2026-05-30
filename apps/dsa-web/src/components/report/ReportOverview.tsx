@@ -13,7 +13,6 @@ interface ReportOverviewProps {
   summary: ReportSummaryType;
   details?: ReportDetailsType;
   isHistory?: boolean;
-  railContent?: React.ReactNode;
 }
 
 type BoardStatus = 'leading' | 'lagging';
@@ -78,7 +77,6 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
   meta,
   summary,
   details,
-  railContent,
 }) => {
   const reportLanguage = normalizeReportLanguage(meta.reportLanguage);
   const text = getReportText(reportLanguage);
@@ -125,15 +123,9 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
   return (
     <div className="space-y-5">
       {/* 主信息区 - 两列布局 */}
-      <div
-        className={
-          railContent
-            ? 'grid grid-cols-1 gap-5 items-start xl:grid-cols-[minmax(0,1.25fr)_minmax(28rem,0.95fr)]'
-            : 'grid grid-cols-1 lg:grid-cols-3 gap-5 items-start'
-        }
-      >
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 items-start">
         {/* 左侧：股票信息与结论 */}
-        <div className={railContent ? 'space-y-5' : 'lg:col-span-2 space-y-5'}>
+        <div className="lg:col-span-2 space-y-5">
           {/* 股票头部 */}
           <Card variant="gradient" padding="md" className="home-report-hero">
             <div className="flex items-start justify-between mb-5">
@@ -279,14 +271,12 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
 
         {/* 右侧：情绪指标 / 关联详情 */}
         <div className="flex flex-col">
-          {railContent || (
-            <Card variant="bordered" padding="md" className="home-panel-card home-rail-card !overflow-visible">
-              <div className="text-center">
-                <h3 className="mb-5 text-sm font-medium tracking-wide text-foreground">{text.marketSentiment}</h3>
-                <ScoreGauge score={summary.sentimentScore} size="lg" language={reportLanguage} />
-              </div>
-            </Card>
-          )}
+          <Card variant="bordered" padding="md" className="home-panel-card home-rail-card !overflow-visible">
+            <div className="text-center">
+              <h3 className="mb-5 text-sm font-medium tracking-wide text-foreground">{text.marketSentiment}</h3>
+              <ScoreGauge score={summary.sentimentScore} size="lg" language={reportLanguage} />
+            </div>
+          </Card>
         </div>
       </div>
     </div>
