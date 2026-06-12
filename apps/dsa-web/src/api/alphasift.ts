@@ -93,6 +93,73 @@ export type AlphaSiftStrategiesResponse = {
   strategyCount: number;
 };
 
+export type AlphaSiftHotspot = {
+  topic: string;
+  name?: string;
+  source?: string;
+  rank?: number | null;
+  changePct?: number | null;
+  heatScore?: number | null;
+  trendScore?: number | null;
+  persistenceScore?: number | null;
+  coolingScore?: number | null;
+  observations?: number | null;
+  state?: string;
+  stage?: string;
+  sampleStockCount?: number | null;
+  leaders?: string[];
+  providerUsed?: string;
+  fallbackUsed?: boolean;
+  cacheUsed?: boolean;
+  cachedAt?: string | null;
+  sourceErrors?: string[];
+  stale?: boolean;
+  staleAgeHours?: number | null;
+};
+
+export type AlphaSiftHotspotRouteItem = {
+  title: string;
+  description: string;
+  source?: string;
+};
+
+export type AlphaSiftHotspotStock = {
+  code?: string;
+  name?: string;
+  changePct?: number | null;
+  amount?: number | null;
+  turnoverRate?: number | null;
+  volumeRatio?: number | null;
+  role?: string;
+  hotStockScore?: number | null;
+};
+
+export type AlphaSiftHotspotDetail = {
+  enabled: boolean;
+  provider: string;
+  topic: string;
+  name?: string;
+  summary?: string;
+  route: AlphaSiftHotspotRouteItem[];
+  stocks: AlphaSiftHotspotStock[];
+  stockCount: number;
+  sourceErrors?: string[];
+};
+
+export type AlphaSiftHotspotsResponse = {
+  enabled: boolean;
+  provider: string;
+  providerUsed?: string;
+  fallbackUsed?: boolean;
+  cacheUsed?: boolean;
+  cachedAt?: string | null;
+  sourceErrors?: string[];
+  stale?: boolean;
+  staleAgeHours?: number | null;
+  hotspots: AlphaSiftHotspot[];
+  hotspotCount: number;
+};
+
 export type AlphaSiftScreenResponse = {
   enabled: boolean;
   candidates: AlphaSiftCandidate[];
@@ -117,6 +184,13 @@ export type AlphaSiftScreenResponse = {
     enrichedCount?: number;
     warnings?: string[];
   };
+  deepAnalysisRequested?: boolean | null;
+  postAnalyzers?: string[];
+  dailyEnriched?: boolean | null;
+  dailyEnrichCount?: number | null;
+  riskEnabled?: boolean | null;
+  portfolioDiversityEnabled?: boolean | null;
+  portfolioConcentrationNotes?: string[];
 };
 
 export type AlphaSiftScreenAccepted = {
@@ -191,6 +265,29 @@ export const alphasiftApi = {
   async getStrategies(): Promise<AlphaSiftStrategiesResponse> {
     const response = await apiClient.get<Record<string, unknown>>('/api/v1/alphasift/strategies', { timeout: ALPHASIFT_INSTALL_TIMEOUT_MS });
     return toCamelCase<AlphaSiftStrategiesResponse>(response.data);
+  },
+
+  async getHotspots(payload: { provider?: string; top?: number; refresh?: boolean } = {}): Promise<AlphaSiftHotspotsResponse> {
+    const response = await apiClient.get<Record<string, unknown>>('/api/v1/alphasift/hotspots', {
+      params: {
+        provider: payload.provider || 'akshare',
+        top: payload.top ?? 12,
+        refresh: payload.refresh ?? false,
+      },
+      timeout: ALPHASIFT_INSTALL_TIMEOUT_MS,
+    });
+    return toCamelCase<AlphaSiftHotspotsResponse>(response.data);
+  },
+
+  async getHotspotDetail(payload: { topic: string; provider?: string }): Promise<AlphaSiftHotspotDetail> {
+    const response = await apiClient.get<Record<string, unknown>>(
+      `/api/v1/alphasift/hotspots/${encodeURIComponent(payload.topic)}`,
+      {
+        params: { provider: payload.provider || 'akshare' },
+        timeout: ALPHASIFT_INSTALL_TIMEOUT_MS,
+      },
+    );
+    return toCamelCase<AlphaSiftHotspotDetail>(response.data);
   },
 
   async install(): Promise<AlphaSiftInstallResponse> {

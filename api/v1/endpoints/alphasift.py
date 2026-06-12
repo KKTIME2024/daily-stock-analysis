@@ -6,7 +6,7 @@ from __future__ import annotations
 import uuid
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from api.deps import get_config_dep
@@ -80,6 +80,25 @@ def alphasift_strategies(
     config: Config = Depends(get_config_dep),
 ) -> Dict[str, Any]:
     return _service(config).strategies()
+
+
+@router.get("/hotspots")
+def alphasift_hotspots(
+    provider: str = Query("", max_length=32),
+    top: int = Query(12, ge=1, le=50),
+    refresh: bool = Query(False),
+    config: Config = Depends(get_config_dep),
+) -> Dict[str, Any]:
+    return _service(config).hotspots(provider=provider, top=top, refresh=refresh)
+
+
+@router.get("/hotspots/{topic:path}")
+def alphasift_hotspot_detail(
+    topic: str,
+    provider: str = Query("", max_length=32),
+    config: Config = Depends(get_config_dep),
+) -> Dict[str, Any]:
+    return _service(config).hotspot_detail(topic=topic, provider=provider)
 
 
 @router.post("/install")

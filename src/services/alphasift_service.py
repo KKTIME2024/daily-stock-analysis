@@ -9,12 +9,14 @@ import json
 import logging
 import math
 import os
+import re
 import subprocess
 import sys
 import threading
 from contextvars import ContextVar
 from contextlib import contextmanager
 from dataclasses import asdict, is_dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
@@ -37,6 +39,9 @@ DSA_PRE_RANK_CONTEXT_MAX_CANDIDATES = 3
 DSA_ALPHASIFT_LLM_CANDIDATE_MULTIPLIER = 2
 DSA_ALPHASIFT_LLM_MAX_CANDIDATES = 12
 DSA_ALPHASIFT_SNAPSHOT_SOURCE_PRIORITY = "em_datacenter,tushare,efinance,akshare_em"
+DSA_ALPHASIFT_DATA_DIR = Path("data") / "alphasift"
+DSA_ALPHASIFT_HOTSPOT_CACHE_PATH = DSA_ALPHASIFT_DATA_DIR / "hotspots.json"
+DSA_ALPHASIFT_HOTSPOT_HISTORY_PATH = DSA_ALPHASIFT_DATA_DIR / "hotspot.history.jsonl"
 _DSA_FETCHER_MANAGER_LOCK = threading.RLock()
 _DSA_FETCHER_MANAGER: Any = None
 _FUNDAMENTAL_BLOCKS = ("valuation", "growth", "earnings", "institution", "capital_flow", "boards")
@@ -46,6 +51,88 @@ _ALPHASIFT_LITELLM_COMPLETION_ROUTES: ContextVar[Optional[Tuple[Dict[str, Any], 
 )
 _ALPHASIFT_LITELLM_COMPLETION_ATTR = "_alphasift_litellm_completion_bridge"
 _ALPHASIFT_LITELLM_COMPLETION_LOCK = threading.Lock()
+
+
+def _safe_float(value: Any) -> Optional[float]:
+    try:
+        if value is None or value == "":
+            return None
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return number
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _resolve_alphasift_data_dir() -> Path:
+    configured = _env_text(os.getenv("ALPHASIFT_DATA_DIR"))
+    if configured:
+        return Path(configured)
+    return DSA_ALPHASIFT_DATA_DIR
+
+
+def _alphasift_hotspot_cache_path() -> Path:
+    if _env_text(os.getenv("ALPHASIFT_DATA_DIR")):
+        return _resolve_alphasift_data_dir() / "hotspots.json"
+    return DSA_ALPHASIFT_HOTSPOT_CACHE_PATH
+
+
+def _alphasift_hotspot_history_path() -> Path:
+    if _env_text(os.getenv("ALPHASIFT_DATA_DIR")):
+        return _resolve_alphasift_data_dir() / "hotspot.history.jsonl"
+    return DSA_ALPHASIFT_HOTSPOT_HISTORY_PATH
+
+
+def _load_alphasift_hotspot_cache(*, provider: str, top: int) -> Optional[Dict[str, Any]]:
+    cache_path = _alphasift_hotspot_cache_path()
+    try:
+        raw = json.loads(cache_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except Exception as exc:
+        logger.warning("Failed to read AlphaSift hotspot cache from %s: %s", cache_path, exc)
+        return None
+
+    payload = raw.get("payload") if isinstance(raw, dict) else None
+    if not isinstance(payload, dict):
+        return None
+    hotspots = payload.get("hotspots")
+    if not isinstance(hotspots, list) or not hotspots:
+        return None
+
+    selected = hotspots[: max(1, min(int(top or 12), 50))]
+    cached = dict(payload)
+    cached.update({
+        "enabled": True,
+        "provider": provider or payload.get("provider") or "akshare",
+        "hotspots": selected,
+        "hotspot_count": len(selected),
+        "cache_used": True,
+        "cached_at": raw.get("cached_at") or payload.get("cached_at"),
+    })
+    cached["source_errors"] = list(cached.get("source_errors") or [])
+    return _remove_non_finite_json_values(cached)
+
+
+def _write_alphasift_hotspot_cache(payload: Dict[str, Any]) -> None:
+    cache_path = _alphasift_hotspot_cache_path()
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cached_at = _utc_now_iso()
+        cache_payload = dict(payload)
+        cache_payload["cache_used"] = False
+        cache_payload["cached_at"] = cached_at
+        cache_path.write_text(
+            json.dumps({"cached_at": cached_at, "payload": cache_payload}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        logger.warning("Failed to write AlphaSift hotspot cache to %s: %s", cache_path, exc)
 
 
 class AlphaSiftStrategyResponse(BaseModel):
@@ -94,6 +181,102 @@ class AlphaSiftService:
         _ensure_alphasift_install_access(request)
         _ensure_alphasift_enabled(self.config)
         return _install_alphasift(self.config)
+
+    def hotspots(self, *, provider: str = "", top: int = 12, refresh: bool = False) -> Dict[str, Any]:
+        _ensure_alphasift_enabled(self.config)
+        _ensure_alphasift_available_for_use()
+        hotspot_module = _import_alphasift_hotspot()
+        discover_hotspots = _get_adapter_callable(
+            hotspot_module,
+            "discover_hotspots",
+            "discover_hotspots() is not callable.",
+        )
+        provider_name, provider_arg = _resolve_hotspot_provider(provider)
+        top_count = max(1, min(int(top or 12), 50))
+        if not refresh:
+            cached = _load_alphasift_hotspot_cache(provider=provider_name, top=top_count)
+            if cached is not None:
+                return cached
+
+        try:
+            with _alphasift_runtime_env(self.config):
+                raw = discover_hotspots(
+                    provider=provider_arg,
+                    top=top_count,
+                    history_path=_alphasift_hotspot_history_path(),
+                    fallback_cache_path=_alphasift_hotspot_cache_path(),
+                )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            cached = _load_alphasift_hotspot_cache(provider=provider_name, top=top_count)
+            if cached is not None:
+                errors = list(cached.get("source_errors") or [])
+                errors.append(f"live refresh failed: {exc}")
+                cached["source_errors"] = errors
+                cached["fallback_used"] = True
+                cached["cache_used"] = True
+                return cached
+            raise HTTPException(
+                status_code=424,
+                detail={"error": "alphasift_hotspots_failed", "message": f"AlphaSift hotspots failed: {exc}"},
+            ) from exc
+
+        items = _remove_non_finite_json_values(_to_plain(raw))
+        if not isinstance(items, list):
+            items = []
+        selected = items[:top_count]
+        source_errors = list(getattr(raw, "source_errors", []) or [])
+        if not selected and source_errors:
+            cached = _load_alphasift_hotspot_cache(provider=provider_name, top=top_count)
+            if cached is not None:
+                errors = list(cached.get("source_errors") or [])
+                errors.extend(source_errors)
+                cached["source_errors"] = errors
+                cached["fallback_used"] = True
+                cached["cache_used"] = True
+                return cached
+
+        payload = {
+            "enabled": True,
+            "provider": provider_name,
+            "provider_used": str(getattr(raw, "provider_used", "")),
+            "fallback_used": bool(getattr(raw, "fallback_used", False)),
+            "cache_used": False,
+            "cached_at": None,
+            "source_errors": source_errors,
+            "stale": bool(getattr(raw, "stale", False)),
+            "stale_age_hours": getattr(raw, "stale_age_hours", None),
+            "hotspots": selected,
+            "hotspot_count": len(selected),
+        }
+        if selected:
+            _write_alphasift_hotspot_cache(payload)
+        return payload
+
+    def hotspot_detail(self, *, topic: str, provider: str = "") -> Dict[str, Any]:
+        _ensure_alphasift_enabled(self.config)
+        _ensure_alphasift_available_for_use()
+        topic_text = _env_text(topic)
+        if not topic_text:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "alphasift_hotspot_topic_required", "message": "热点题材名称不能为空。"},
+            )
+        provider_name, provider_arg = _resolve_hotspot_provider(provider)
+        if not isinstance(provider_arg, DsaEastMoneyHotspotProvider):
+            provider_arg = DsaEastMoneyHotspotProvider()
+        try:
+            with _alphasift_runtime_env(self.config):
+                detail = provider_arg.hotspot_detail(topic_text)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=424,
+                detail={"error": "alphasift_hotspot_detail_failed", "message": f"AlphaSift hotspot detail failed: {exc}"},
+            ) from exc
+        detail["enabled"] = True
+        detail["provider"] = provider_name
+        return _remove_non_finite_json_values(detail)
 
     def screen(self, *, strategy: str, market: str, max_results: int) -> Dict[str, Any]:
         _ensure_alphasift_enabled(self.config)
@@ -150,6 +333,13 @@ class AlphaSiftService:
             "warnings": raw_data.get("warnings") or [],
             "source_errors": raw_data.get("source_errors") or [],
             "dsa_enrichment": dsa_enrichment,
+            "deep_analysis_requested": raw_data.get("deep_analysis_requested"),
+            "post_analyzers": raw_data.get("post_analyzers") or [],
+            "daily_enriched": raw_data.get("daily_enriched"),
+            "daily_enrich_count": raw_data.get("daily_enrich_count"),
+            "risk_enabled": raw_data.get("risk_enabled"),
+            "portfolio_diversity_enabled": raw_data.get("portfolio_diversity_enabled"),
+            "portfolio_concentration_notes": raw_data.get("portfolio_concentration_notes") or [],
         }
 
 
@@ -360,6 +550,35 @@ def _import_alphasift() -> Any:
         diagnostics = _log_unexpected_alphasift_exception("import_adapter", exc)
         raise _alphasift_unavailable_exception(
             f"AlphaSift 适配层导入失败，请检查依赖完整性和当前 Python 环境：{exc}",
+            diagnostics=diagnostics,
+        ) from exc
+
+
+def _import_alphasift_hotspot() -> Any:
+    try:
+        _prepare_alphasift_runtime_env()
+        return importlib.import_module("alphasift.hotspot")
+    except ModuleNotFoundError as exc:
+        if getattr(exc, "name", None) in {"alphasift", "alphasift.hotspot"}:
+            diagnostics = {
+                "reason": "missing_module",
+                "stage": "import_hotspot",
+                "error_type": exc.__class__.__name__,
+                "module": str(getattr(exc, "name", "alphasift.hotspot")),
+            }
+            raise _alphasift_unavailable_exception(
+                f"AlphaSift hotspot module is unavailable: {exc}",
+                diagnostics=diagnostics,
+            ) from exc
+        diagnostics = _log_unexpected_alphasift_exception("import_hotspot", exc)
+        raise _alphasift_unavailable_exception(
+            f"AlphaSift hotspot module import failed: {exc}",
+            diagnostics=diagnostics,
+        ) from exc
+    except Exception as exc:
+        diagnostics = _log_unexpected_alphasift_exception("import_hotspot", exc)
+        raise _alphasift_unavailable_exception(
+            f"AlphaSift hotspot module import failed: {exc}",
             diagnostics=diagnostics,
         ) from exc
 
@@ -743,7 +962,540 @@ def _build_alphasift_runtime_env(config: Config, *, max_results: Optional[int] =
     put_default("LLM_CANDIDATE_MULTIPLIER", str(DSA_ALPHASIFT_LLM_CANDIDATE_MULTIPLIER))
     put_default("LLM_MAX_CANDIDATES", str(_resolve_dsa_llm_max_candidates(max_results)))
     put_default("SNAPSHOT_SOURCE_PRIORITY", DSA_ALPHASIFT_SNAPSHOT_SOURCE_PRIORITY)
+    alphasift_data_dir = _resolve_alphasift_data_dir()
+    put_default("ALPHASIFT_DATA_DIR", str(alphasift_data_dir))
+    put_default("ALPHASIFT_FALLBACK_SNAPSHOT_PATH", str(alphasift_data_dir / "snapshot.last_good.json"))
+    put_default("ALPHASIFT_DAILY_HISTORY_CACHE_DIR", str(alphasift_data_dir / "daily_history"))
+    put_default("ALPHASIFT_INDUSTRY_PROVIDER_CACHE_DIR", str(alphasift_data_dir / "industry_provider_cache"))
     return env
+
+
+def _resolve_hotspot_provider(provider: str) -> Tuple[str, Any]:
+    requested = (provider or "").strip()
+    if requested.lower() == "akshare":
+        return requested, DsaEastMoneyHotspotProvider()
+    if requested:
+        return requested, requested
+    configured = (os.getenv("INDUSTRY_PROVIDER") or "").strip()
+    if configured.lower() == "akshare":
+        return configured, DsaEastMoneyHotspotProvider()
+    return configured or "none", configured or "none"
+
+
+class DsaEastMoneyHotspotProvider:
+    """Minimal EastMoney board provider for AlphaSift hotspot scoring."""
+
+    _BASE_URL = "https://79.push2.eastmoney.com/api/qt/clist/get"
+    _COMMON_PARAMS = {
+        "pn": "1",
+        "po": "1",
+        "np": "1",
+        "ut": "bd1d9ddb04089700cf9c27f6f7426281",
+        "fltt": "2",
+        "invt": "2",
+        "fid": "f12",
+        "fields": "f3,f12,f14",
+    }
+    _BROAD_BOARD_KEYWORDS = (
+        "融资融券",
+        "深股通",
+        "沪股通",
+        "创业板",
+        "昨日",
+        "机构重仓",
+        "富时罗素",
+        "MSCI",
+        "标普",
+        "上证",
+        "深证",
+        "中证",
+        "HS300",
+        "证金",
+        "QFII",
+        "基金",
+        "转融券",
+        "预增",
+        "预盈",
+        "亏损",
+        "低价",
+        "小盘股",
+        "中盘股",
+        "百元股",
+        "破发",
+        "破增发",
+        "趋势股",
+        "广东板块",
+        "江苏板块",
+        "浙江板块",
+        "上海板块",
+        "深圳特区",
+        "央国企",
+        "国企改革",
+        "专精特新",
+        "其他",
+        "Ⅱ",
+        "Ⅲ",
+    )
+    _CHANGE_EVENT_LABELS = {
+        4: "快速拉升",
+        8: "快速回落",
+        16: "大幅上涨",
+        32: "大幅下跌",
+        64: "有大笔买入",
+        128: "有大笔卖出",
+        8193: "火箭发射",
+        8194: "高台跳水",
+        8201: "大笔买入",
+        8202: "大笔卖出",
+        8203: "封涨停板",
+        8204: "打开涨停板",
+        8207: "有打开跌停板",
+        8208: "封跌停板",
+        8209: "向上缺口",
+        8210: "向下缺口",
+        8211: "60日新高",
+        8212: "60日新低",
+        8213: "60日大幅上涨",
+        8214: "60日大幅下跌",
+        8215: "竞价上涨",
+        8216: "竞价下跌",
+        8217: "高开",
+        8218: "低开",
+        8219: "放量",
+        8220: "缩量",
+        8221: "向上突破",
+        8222: "向下破位",
+    }
+
+    def stock_board_concept_name_em(self) -> Any:
+        frame = self._fetch_board_changes_with_fallback()
+        if frame is not None and not frame.empty:
+            return frame
+        frame = self._fetch_rankings_with_fallback("concept")
+        if frame is not None and not frame.empty:
+            return frame
+        return self._fetch_board_names(source_fs="m:90 t:3 f:!50")
+
+    def stock_board_industry_name_em(self) -> Any:
+        concept_frame = self._fetch_board_changes_with_fallback()
+        if concept_frame is not None and not concept_frame.empty:
+            import pandas as pd
+
+            return pd.DataFrame()
+        frame = self._fetch_rankings_with_fallback("industry")
+        if frame is not None and not frame.empty:
+            return frame
+        return self._fetch_board_names(source_fs="m:90 t:2 f:!50")
+
+    def stock_board_concept_cons_em(self, symbol: str = "") -> Any:
+        try:
+            frame = self._fetch_ths_constituents(symbol)
+        except Exception as exc:
+            logger.warning(
+                "AlphaSift THS constituent fetch failed for %s; falling back to alternative sources: %s",
+                symbol,
+                exc,
+            )
+            frame = None
+        if frame is not None and not frame.empty:
+            return frame
+        frame = self._fallback_constituents(symbol)
+        if frame is not None and not frame.empty:
+            return frame
+        return self._fetch_eastmoney_constituents(symbol, source="concept")
+
+    def stock_board_industry_cons_em(self, symbol: str = "") -> Any:
+        frame = self._fetch_eastmoney_constituents(symbol, source="industry")
+        if frame is not None and not frame.empty:
+            return frame
+        return self._fallback_constituents(symbol)
+
+    def hotspot_detail(self, topic: str) -> Dict[str, Any]:
+        try:
+            summary = self._find_board_change(topic)
+        except Exception as exc:
+            logger.warning(
+                "AlphaSift board-change summary fetch failed for %s; continuing without summary: %s",
+                topic,
+                exc,
+            )
+            summary = {}
+        if self._is_industry_hotspot(topic):
+            stocks = self._normalize_constituent_records(self.stock_board_industry_cons_em(topic))
+        else:
+            stocks = self._normalize_constituent_records(self.stock_board_concept_cons_em(topic))
+        route = self._build_hotspot_route(topic, summary)
+        info = self._fetch_ths_info(topic)
+        if info:
+            route.append({
+                "title": "同花顺板块概况",
+                "description": "；".join(f"{key} {value}" for key, value in list(info.items())[:4]),
+                "source": "ths_info",
+            })
+        if not stocks and summary:
+            stock_code = _env_text(summary.get("板块异动最频繁个股及所属类型-股票代码"))
+            stock_name = _env_text(summary.get("板块异动最频繁个股及所属类型-股票名称"))
+            if stock_code or stock_name:
+                stocks.append({
+                    "code": stock_code,
+                    "name": stock_name,
+                    "role": "异动核心",
+                    "change_pct": None,
+                    "hot_stock_score": 60.0,
+                })
+        return {
+            "topic": topic,
+            "name": topic,
+            "summary": self._build_hotspot_summary(topic, summary),
+            "route": route,
+            "stocks": stocks[:30],
+            "stock_count": len(stocks),
+            "source_errors": [],
+        }
+
+    def _fetch_board_changes(self) -> Any:
+        import akshare as ak
+        import pandas as pd
+
+        df = ak.stock_board_change_em()
+        if df is None or df.empty:
+            return pd.DataFrame()
+        rows = []
+        for index, row in df.iterrows():
+            topic = _env_text(row.get("板块名称"))
+            if not topic or self._is_broad_board(topic):
+                continue
+            change_pct = _safe_float(row.get("涨跌幅"))
+            event_count = int(_safe_float(row.get("板块异动总次数")) or 0)
+            leader = _env_text(row.get("板块异动最频繁个股及所属类型-股票名称"))
+            heat_score = min(99.0, max(1.0, event_count / 120.0 + max(change_pct or 0.0, 0.0) * 9.0))
+            rows.append({
+                "name": topic,
+                "change_pct": change_pct,
+                "rank": index + 1,
+                "heat_score": heat_score,
+                "leader": leader,
+                "event_count": event_count,
+            })
+        rows.sort(key=lambda item: (item.get("heat_score") or 0, item.get("event_count") or 0), reverse=True)
+        return pd.DataFrame(rows)
+
+    def _fetch_board_changes_with_fallback(self) -> Any:
+        import pandas as pd
+
+        try:
+            return self._fetch_board_changes()
+        except Exception as exc:
+            logger.warning("AlphaSift hotspot board-change fetch failed; falling back to ranking/board names: %s", exc)
+            return pd.DataFrame()
+
+    def _is_broad_board(self, name: str) -> bool:
+        return any(keyword in name for keyword in self._BROAD_BOARD_KEYWORDS)
+
+    def _fetch_rankings(self, source: str) -> Any:
+        import pandas as pd
+
+        manager = _get_dsa_fetcher_manager()
+        fetch = manager.get_concept_rankings if source == "concept" else manager.get_sector_rankings
+        top, _bottom = fetch(100)
+        rows = []
+        for index, item in enumerate(top or []):
+            name = _env_text((item or {}).get("name"))
+            if not name:
+                continue
+            rows.append({
+                "name": name,
+                "change_pct": (item or {}).get("change_pct"),
+                "rank": index + 1,
+            })
+        return pd.DataFrame(rows)
+
+    def _fetch_rankings_with_fallback(self, source: str) -> Any:
+        import pandas as pd
+
+        try:
+            return self._fetch_rankings(source)
+        except Exception as exc:
+            logger.warning("AlphaSift hotspot %s ranking fetch failed; falling back to board names: %s", source, exc)
+            return pd.DataFrame()
+
+    def _fetch_board_names(self, *, source_fs: str) -> Any:
+        import pandas as pd
+        import requests
+
+        params = dict(self._COMMON_PARAMS)
+        params.update({"pz": "100", "fs": source_fs})
+        session = requests.Session()
+        response = session.get(
+            self._BASE_URL,
+            params=params,
+            timeout=20,
+            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json,text/plain,*/*"},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        rows = ((payload.get("data") or {}).get("diff") or []) if isinstance(payload, dict) else []
+        normalized = [
+            {
+                "板块名称": str(row.get("f14") or "").strip(),
+                "涨跌幅": row.get("f3"),
+                "序号": index + 1,
+            }
+            for index, row in enumerate(rows)
+            if str(row.get("f14") or "").strip()
+        ]
+        return pd.DataFrame(normalized)
+
+    def _find_board_change(self, topic: str) -> Dict[str, Any]:
+        import akshare as ak
+
+        df = ak.stock_board_change_em()
+        if df is None or df.empty:
+            return {}
+        rows = df[df["板块名称"].astype(str) == topic]
+        if rows.empty:
+            rows = df[df["板块名称"].astype(str).str.contains(re.escape(topic), case=False, na=False)]
+        if rows.empty:
+            return {}
+        return rows.iloc[0].to_dict()
+
+    def _is_industry_hotspot(self, topic: str) -> bool:
+        try:
+            frame = self.stock_board_industry_name_em()
+        except Exception as exc:
+            logger.warning(
+                "AlphaSift industry hotspot source check failed for %s; using concept constituents: %s",
+                topic,
+                exc,
+            )
+            return False
+        return self._board_frame_contains_topic(frame, topic)
+
+    def _board_frame_contains_topic(self, frame: Any, topic: str) -> bool:
+        import pandas as pd
+
+        topic_text = _env_text(topic)
+        if not topic_text:
+            return False
+        df = pd.DataFrame(frame)
+        if df.empty:
+            return False
+        for column in ("name", "板块名称", "行业名称", "名称"):
+            if column not in df.columns:
+                continue
+            values = df[column].map(_env_text)
+            if bool((values == topic_text).any()):
+                return True
+        return False
+
+    def _build_hotspot_summary(self, topic: str, summary: Dict[str, Any]) -> str:
+        if not summary:
+            return f"{topic} 当前暂无可用的板块异动摘要。"
+        change_pct = _safe_float(summary.get("涨跌幅"))
+        event_count = int(_safe_float(summary.get("板块异动总次数")) or 0)
+        leader = _env_text(summary.get("板块异动最频繁个股及所属类型-股票名称"))
+        action = _env_text(summary.get("板块异动最频繁个股及所属类型-买卖方向"))
+        parts = [f"{topic} 当前涨跌幅 {change_pct:.2f}%" if change_pct is not None else f"{topic} 当前有异动记录"]
+        if event_count:
+            parts.append(f"盘中异动 {event_count} 次")
+        if leader:
+            parts.append(f"高频异动个股为 {leader}{f'（{action}）' if action else ''}")
+        return "，".join(parts) + "。"
+
+    def _build_hotspot_route(self, topic: str, summary: Dict[str, Any]) -> List[Dict[str, Any]]:
+        route: List[Dict[str, Any]] = []
+        ths_event = self._fetch_ths_summary_event(topic)
+        if ths_event:
+            route.append({
+                "title": "题材驱动",
+                "description": ths_event,
+                "source": "ths_summary",
+            })
+        if summary:
+            route.append({
+                "title": "盘中发酵",
+                "description": self._build_hotspot_summary(topic, summary),
+                "source": "eastmoney_board_change",
+            })
+            for item in self._parse_change_events(summary.get("板块具体异动类型列表及出现次数"))[:5]:
+                route.append({
+                    "title": item["label"],
+                    "description": f"出现 {item['count']} 次，反映题材内个股盘中联动。",
+                    "source": "eastmoney_board_change",
+                })
+        if not route:
+            route.append({
+                "title": "等待发酵",
+                "description": "暂未获取到明确催化事件，可继续观察涨跌幅、成交额和核心个股联动。",
+                "source": "fallback",
+            })
+        return route
+
+    def _parse_change_events(self, raw: Any) -> List[Dict[str, Any]]:
+        if isinstance(raw, str):
+            try:
+                import ast
+
+                raw = ast.literal_eval(raw)
+            except Exception:
+                raw = []
+        events = []
+        for item in raw or []:
+            if not isinstance(item, dict):
+                continue
+            event_type = int(_safe_float(item.get("t")) or 0)
+            count = int(_safe_float(item.get("ct")) or 0)
+            if not count:
+                continue
+            events.append({
+                "type": event_type,
+                "label": self._CHANGE_EVENT_LABELS.get(event_type, f"异动类型 {event_type}"),
+                "count": count,
+            })
+        return sorted(events, key=lambda item: item["count"], reverse=True)
+
+    def _fetch_ths_summary_event(self, topic: str) -> str:
+        import akshare as ak
+
+        try:
+            df = ak.stock_board_concept_summary_ths()
+        except Exception:
+            return ""
+        if df is None or df.empty:
+            return ""
+        if "概念名称" not in df.columns:
+            logger.warning(
+                "AlphaSift THS summary missing required column '概念名称'; skip enrichment.",
+            )
+            return ""
+        rows = df[df["概念名称"].astype(str) == topic]
+        if rows.empty:
+            rows = df[df["概念名称"].astype(str).str.contains(re.escape(topic), case=False, na=False)]
+        if rows.empty:
+            return ""
+        row = rows.iloc[0]
+        date = _env_text(row.get("日期"))
+        event = _env_text(row.get("驱动事件"))
+        return f"{date}：{event}" if date and event else event
+
+    def _fetch_ths_info(self, topic: str) -> Dict[str, str]:
+        import akshare as ak
+
+        try:
+            df = ak.stock_board_concept_info_ths(symbol=topic)
+        except Exception:
+            return {}
+        if df is None or df.empty or "项目" not in df.columns or "值" not in df.columns:
+            return {}
+        return {
+            _env_text(row.get("项目")): _env_text(row.get("值"))
+            for _, row in df.iterrows()
+            if _env_text(row.get("项目"))
+        }
+
+    def _fetch_eastmoney_constituents(self, topic: str, *, source: str) -> Any:
+        import akshare as ak
+
+        try:
+            if source == "industry":
+                return ak.stock_board_industry_cons_em(symbol=topic)
+            return ak.stock_board_concept_cons_em(symbol=topic)
+        except Exception:
+            return None
+
+    def _fetch_ths_constituents(self, topic: str) -> Any:
+        import pandas as pd
+        import requests
+
+        code = self._resolve_ths_concept_code(topic)
+        if not code:
+            return pd.DataFrame()
+        url = f"http://q.10jqka.com.cn/gn/detail/code/{code}/"
+        response = requests.get(
+            url,
+            headers={"User-Agent": "Mozilla/5.0", "Referer": "http://q.10jqka.com.cn/gn/"},
+            timeout=15,
+        )
+        response.raise_for_status()
+        html = response.content.decode("gbk", "ignore")
+        rows = []
+        seen = set()
+        for match in re.finditer(r">(\d{6})<.*?>([^<>\n]{2,12})<", html, re.S):
+            code_text = match.group(1)
+            name_text = re.sub(r"\s+", "", match.group(2))
+            if code_text in seen or not name_text or re.search(r"\d", name_text):
+                continue
+            seen.add(code_text)
+            rows.append({"code": code_text, "name": name_text})
+            if len(rows) >= 80:
+                break
+        return pd.DataFrame(rows)
+
+    def _resolve_ths_concept_code(self, topic: str) -> str:
+        import akshare as ak
+
+        try:
+            df = ak.stock_board_concept_name_ths()
+        except Exception:
+            return ""
+        if df is None or df.empty:
+            return ""
+        rows = df[df["name"].astype(str) == topic]
+        if rows.empty:
+            rows = df[df["name"].astype(str).str.contains(re.escape(topic), case=False, na=False)]
+        if rows.empty and topic.endswith("概念"):
+            base = topic[:-2]
+            rows = df[df["name"].astype(str).str.contains(re.escape(base), case=False, na=False)]
+        if rows.empty:
+            return ""
+        return _env_text(rows.iloc[0].get("code"))
+
+    def _fallback_constituents(self, topic: str) -> Any:
+        import pandas as pd
+
+        try:
+            summary = self._find_board_change(topic)
+        except Exception as exc:
+            logger.warning(
+                "AlphaSift board-change constituent fallback failed for %s; trying other sources: %s",
+                topic,
+                exc,
+            )
+            return pd.DataFrame()
+        code = _env_text(summary.get("板块异动最频繁个股及所属类型-股票代码"))
+        name = _env_text(summary.get("板块异动最频繁个股及所属类型-股票名称"))
+        if not code and not name:
+            return pd.DataFrame()
+        return pd.DataFrame([{
+            "code": code,
+            "name": name,
+            "change_pct": None,
+            "hot_stock_score": 60.0,
+        }])
+
+    def _normalize_constituent_records(self, frame: Any) -> List[Dict[str, Any]]:
+        import pandas as pd
+
+        df = pd.DataFrame(frame)
+        if df.empty:
+            return []
+        records = []
+        for _, row in df.iterrows():
+            code = _env_text(row.get("code") or row.get("代码") or row.get("证券代码"))
+            name = _env_text(row.get("name") or row.get("名称") or row.get("股票名称"))
+            if not code and not name:
+                continue
+            records.append({
+                "code": code,
+                "name": name,
+                "change_pct": _safe_float(row.get("change_pct") or row.get("涨跌幅") or row.get("涨幅")),
+                "amount": _safe_float(row.get("amount") or row.get("成交额") or row.get("成交金额")),
+                "turnover_rate": _safe_float(row.get("turnover_rate") or row.get("换手率")),
+                "volume_ratio": _safe_float(row.get("volume_ratio") or row.get("量比")),
+                "role": _env_text(row.get("role")) or "概念股",
+                "hot_stock_score": _safe_float(row.get("hot_stock_score")) or 0.0,
+            })
+        return records
 
 
 def _build_alphasift_context(config: Config, *, max_results: Optional[int] = None) -> Dict[str, Any]:

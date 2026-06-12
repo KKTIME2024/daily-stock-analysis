@@ -937,8 +937,17 @@ def start_api_server(host: str, port: int, config: Config) -> None:
         port: 监听端口
         config: 配置对象
     """
+    import socket
     import threading
     import uvicorn
+
+    probe = socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        probe.bind((host, port))
+    except OSError as exc:
+        raise RuntimeError(f"FastAPI port is not available: {host}:{port}") from exc
+    finally:
+        probe.close()
 
     def run_server():
         level_name = (config.log_level or "INFO").lower()
@@ -1128,6 +1137,9 @@ def main() -> int:
             bot_clients_started = True
         except Exception as e:
             logger.error(f"启动 FastAPI 服务失败: {e}")
+            if args.serve_only:
+                return 1
+            start_serve = False
 
     if bot_clients_started:
         start_bot_stream_clients(config)

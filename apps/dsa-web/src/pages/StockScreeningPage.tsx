@@ -1,9 +1,11 @@
 import type React from 'react';
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, CircleAlert, Play, PlusCircle, Search, SlidersHorizontal } from 'lucide-react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { CheckCircle2, CircleAlert, Flame, Play, PlusCircle, RefreshCw, Search, SlidersHorizontal } from 'lucide-react';
 import {
   alphasiftApi,
   type AlphaSiftCandidate,
+  type AlphaSiftHotspotDetail,
+  type AlphaSiftHotspot,
   type AlphaSiftScreenResponse,
   type AlphaSiftScreenTaskStatus,
   type AlphaSiftStrategy,
@@ -273,6 +275,15 @@ const StockScreeningPage: React.FC = () => {
   const [strategies, setStrategies] = useState<AlphaSiftStrategy[]>([]);
   const [maxResults, setMaxResults] = useState(restoredTask?.maxResults || 3);
   const [candidates, setCandidates] = useState<AlphaSiftCandidate[]>([]);
+  const [hotspots, setHotspots] = useState<AlphaSiftHotspot[]>([]);
+  const [selectedHotspotTopic, setSelectedHotspotTopic] = useState<string | null>(null);
+  const selectedHotspotTopicRef = useRef<string | null>(null);
+  const hotspotDetailRequestIdRef = useRef(0);
+  const [hotspotDetail, setHotspotDetail] = useState<AlphaSiftHotspotDetail | null>(null);
+  const [loadingHotspotDetail, setLoadingHotspotDetail] = useState(false);
+  const [hotspotDetailError, setHotspotDetailError] = useState('');
+  const [loadingHotspots, setLoadingHotspots] = useState(false);
+  const [hotspotError, setHotspotError] = useState('');
   const [screenMeta, setScreenMeta] = useState<AlphaSiftScreenResponse | null>(null);
   const [expandedCode, setExpandedCode] = useState<string | null>(null);
   const [loading, setLoading] = useState(Boolean(restoredTask?.taskId));
@@ -311,6 +322,36 @@ const StockScreeningPage: React.FC = () => {
     setExpandedCode(null);
   };
 
+  const loadHotspotDetail = useCallback(async (topic: string) => {
+    if (!topic) {
+      return;
+    }
+    const requestId = hotspotDetailRequestIdRef.current + 1;
+    hotspotDetailRequestIdRef.current = requestId;
+    const isCurrentRequest = () => hotspotDetailRequestIdRef.current === requestId;
+    const canApplyRequest = () => isCurrentRequest() && selectedHotspotTopicRef.current === topic;
+    setLoadingHotspotDetail(true);
+    setHotspotDetail((currentDetail) => (currentDetail?.topic === topic ? currentDetail : null));
+    setHotspotDetailError('');
+    try {
+      const detail = await alphasiftApi.getHotspotDetail({ topic, provider: 'akshare' });
+      if (!canApplyRequest()) {
+        return;
+      }
+      setHotspotDetail(detail);
+    } catch (err) {
+      if (!canApplyRequest()) {
+        return;
+      }
+      setHotspotDetail(null);
+      setHotspotDetailError(toApiErrorMessage(err, '热点题材详情加载失败，请稍后重试。'));
+    } finally {
+      if (isCurrentRequest()) {
+        setLoadingHotspotDetail(false);
+      }
+    }
+  }, []);
+
   const loadStrategies = useCallback(async () => {
     setLoadingStrategies(true);
     try {
@@ -331,6 +372,51 @@ const StockScreeningPage: React.FC = () => {
     }
   }, []);
 
+  const loadHotspots = useCallback(async (refresh = false) => {
+    setLoadingHotspots(true);
+    setHotspotError('');
+    try {
+      const result = await alphasiftApi.getHotspots({ provider: 'akshare', top: 12, refresh });
+      const nextHotspots = result.hotspots || [];
+      const currentTopic = selectedHotspotTopicRef.current;
+      const retainedTopic = Boolean(currentTopic && nextHotspots.some((item) => item.topic === currentTopic));
+      const nextTopic = retainedTopic ? currentTopic : nextHotspots[0]?.topic ?? null;
+      setHotspots(nextHotspots);
+      setSelectedHotspotTopic(nextTopic);
+      selectedHotspotTopicRef.current = nextTopic;
+      if (retainedTopic && refresh && nextTopic) {
+        void loadHotspotDetail(nextTopic);
+      } else if (!retainedTopic) {
+        setHotspotDetail(null);
+      }
+      setHotspotDetailError('');
+      if (nextHotspots.length === 0) {
+        const sourceError = result.sourceErrors?.[0];
+        setHotspotError(sourceError ? `热点题材暂未返回数据：${sourceError}` : '热点题材暂未返回数据');
+      }
+    } catch (err) {
+      setHotspotError(toApiErrorMessage(err, '热点题材加载失败，请稍后重试。'));
+    } finally {
+      setLoadingHotspots(false);
+    }
+  }, [loadHotspotDetail]);
+
+  const handleHotspotSelect = useCallback((topic: string) => {
+    selectedHotspotTopicRef.current = topic;
+    setSelectedHotspotTopic(topic);
+  }, []);
+
+  useEffect(() => {
+    selectedHotspotTopicRef.current = selectedHotspotTopic;
+  }, [selectedHotspotTopic]);
+
+  useEffect(() => {
+    if (!selectedHotspotTopic) {
+      return;
+    }
+    void loadHotspotDetail(selectedHotspotTopic);
+  }, [loadHotspotDetail, selectedHotspotTopic]);
+
   useEffect(() => {
     let active = true;
     alphasiftApi
@@ -343,6 +429,7 @@ const StockScreeningPage: React.FC = () => {
         setAvailable(status.available);
         if (status.enabled && status.available) {
           void loadStrategies();
+          void loadHotspots(false);
         }
       })
       .catch(() => {
@@ -354,7 +441,7 @@ const StockScreeningPage: React.FC = () => {
     return () => {
       active = false;
     };
-  }, [loadStrategies]);
+  }, [loadHotspots, loadStrategies]);
 
   useEffect(() => {
     if (!activeTaskId) {
@@ -565,6 +652,141 @@ const StockScreeningPage: React.FC = () => {
       ) : null}
 
       {error ? <InlineAlert variant="danger" title="调用失败" message={error} /> : null}
+
+      <section className="rounded-2xl border border-orange-300/60 bg-card/95 p-4 shadow-soft-card">
+        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-3">
+            <span className="grid h-8 w-8 place-items-center rounded-xl bg-orange-500/10 text-orange-500">
+              <Flame className="h-4 w-4" />
+            </span>
+            <div>
+              <h2 className="text-sm font-semibold text-foreground">热点题材</h2>
+              <p className="mt-1 text-xs leading-5 text-secondary-text">
+                来自 AlphaSift 最新 hotspot 能力；capital_heat、balanced_alpha 等策略会把 theme_heat 纳入评分。
+              </p>
+            </div>
+          </div>
+          <Button
+            size="sm"
+            variant="secondary"
+            isLoading={loadingHotspots}
+            loadingText="刷新中..."
+            disabled={!isScreeningEnabled || loadingHotspots}
+            onClick={() => void loadHotspots(true)}
+          >
+            <RefreshCw className="h-4 w-4" />
+            刷新热点题材
+          </Button>
+        </div>
+
+        {hotspotError ? (
+          <p className="mb-3 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+            {hotspotError}
+          </p>
+        ) : null}
+
+        {hotspots.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-border bg-surface/70 px-4 py-6 text-sm text-secondary-text">
+            点击刷新后会拉取热点概念/行业排行、热度分、生命周期阶段和样本龙头。
+          </div>
+        ) : (
+          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+            {hotspots.map((item) => {
+              const selected = selectedHotspotTopic === item.topic;
+              return (
+              <button
+                key={`${item.topic}-${item.rank ?? ''}`}
+                className={`rounded-xl border p-4 text-left transition-colors ${
+                  selected
+                    ? 'border-orange-400 bg-orange-500/10 shadow-[0_0_0_1px_hsl(var(--warning)/0.18)]'
+                    : 'border-border/80 bg-surface/70 hover:border-orange-300/80 hover:bg-orange-500/5'
+                }`}
+                type="button"
+                onClick={() => handleHotspotSelect(item.topic)}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-foreground">{item.name || item.topic}</p>
+                    <p className="mt-1 text-xs text-secondary-text">{item.stage || item.state || '阶段待观察'}</p>
+                  </div>
+                  <span className="rounded-full bg-orange-500/10 px-2 py-1 text-xs font-semibold text-orange-500">
+                    {formatNumber(item.heatScore, 0)}
+                  </span>
+                </div>
+                <div className="mt-3 grid gap-1 text-xs text-secondary-text">
+                  <span>涨跌幅 {formatNumber(item.changePct)}%</span>
+                  <span>趋势 {formatNumber(item.trendScore, 1)} · 持续 {formatNumber(item.persistenceScore, 1)}</span>
+                  <span>样本 {item.sampleStockCount ?? 0} · 龙头 {(item.leaders || []).slice(0, 2).join('、') || '-'}</span>
+                </div>
+              </button>
+              );
+            })}
+          </div>
+        )}
+
+        {selectedHotspotTopic ? (
+          <div className="mt-4 rounded-xl border border-border/80 bg-surface/80 p-4">
+            <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-foreground">
+                  {hotspotDetail?.name || selectedHotspotTopic}
+                </h3>
+                <p className="mt-1 text-xs leading-5 text-secondary-text">
+                  {loadingHotspotDetail ? '正在读取发酵路线与概念股...' : hotspotDetail?.summary || '点击题材查看发酵路线与概念股。'}
+                </p>
+              </div>
+              {hotspotDetail?.stockCount != null ? (
+                <span className="w-fit rounded-full bg-orange-500/10 px-3 py-1 text-xs font-semibold text-orange-500">
+                  概念股 {hotspotDetail.stockCount}
+                </span>
+              ) : null}
+            </div>
+
+            {hotspotDetailError ? (
+              <p className="mb-3 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+                {hotspotDetailError}
+              </p>
+            ) : null}
+
+            {hotspotDetail ? (
+              <div className="grid gap-4 lg:grid-cols-[1fr_1.3fr]">
+                <div>
+                  <p className="mb-2 text-xs font-semibold text-secondary-text">发酵路线</p>
+                  <div className="space-y-2">
+                    {(hotspotDetail.route || []).map((item, index) => (
+                      <div key={`${item.title}-${index}`} className="rounded-lg border border-border/70 bg-card/80 p-3">
+                        <p className="text-xs font-semibold text-foreground">{item.title}</p>
+                        <p className="mt-1 text-xs leading-5 text-secondary-text">{item.description}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <p className="mb-2 text-xs font-semibold text-secondary-text">概念股</p>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {(hotspotDetail.stocks || []).slice(0, 10).map((stock) => (
+                      <div key={`${stock.code || stock.name}`} className="rounded-lg border border-border/70 bg-card/80 p-3">
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <p className="text-xs font-semibold text-foreground">{stock.name || stock.code || '-'}</p>
+                            <p className="mt-1 text-[11px] text-secondary-text">{stock.code || '-'}</p>
+                          </div>
+                          <span className="rounded-full bg-cyan/10 px-2 py-1 text-[11px] font-semibold text-cyan">
+                            {stock.role || '概念股'}
+                          </span>
+                        </div>
+                        <p className="mt-2 text-[11px] text-secondary-text">
+                          涨跌幅 {formatNumber(stock.changePct)}% · 热度 {formatNumber(stock.hotStockScore, 0)}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </section>
 
       <section className="rounded-2xl border border-cyan/35 bg-card/95 p-4 shadow-soft-card">
         <div className="mb-4 flex items-center justify-between gap-3">
