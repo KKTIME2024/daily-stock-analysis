@@ -25,6 +25,7 @@
 - 外部 API 边界仍仅限既有 `yfinance` fetch 路径（含 `Ticker`/`history`/`fast_info`）与既有兜底逻辑；没有新增或迁移 API 网关/host，`YFINANCE_PRIORITY` 是唯一受影响的可见参数。
 - 兼容性验证依据：行情/基本面上下文在 `data_provider/base.py` 与 `realtime_types.py` 中按现有 `getattr`/可选字段约定向下游透传，不强制读写新增字段；无配置迁移脚本，未观察到 provider/model/base URL fallback 路径变更。
 - 回退方式：若新增元数据字段在某端产生兼容问题，可先忽略这些字段并按既有市场判定+行情展示链路运行；必要时回滚本次提交或通过移除 `jp/kr` `MarketSymbol` 及路由扩展恢复旧行为。
+- 运行时配置语义说明：`MARKET_REVIEW_REGION`、`MARKET_REVIEW_COLOR_SCHEME` 和 Web 市场选择入口只影响大盘复盘输入与展示；不会触发 provider/model/base URL 重写、运行时配置清理（cleanup）或旧链路迁移。
 
 不承诺项：
 

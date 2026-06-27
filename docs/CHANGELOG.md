@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [新功能] #1815 Phase 2 大盘复盘新增 `jp`/`kr` 市场：支持日经225/TOPIX、KOSPI/KOSDAQ 指数复盘，扩展 `MARKET_REVIEW_REGION`、交易日过滤、Web 设置枚举、市场 profile/strategy、文档与回归测试。
 - [改进] #1815 Phase 1 硬化日本/韩国 suffix-only 个股 MVP：集中 JP/KR/TW suffix 识别规则，扩充日韩股票种子索引，并为 yfinance 报价/基本面上下文补充市场、币种与数据质量元数据。
 - [文档] #1815 补充 JP/KR/TW suffix-only MVP 在外部 API、provider/model/base URL 与运行时配置上的边界说明：当前为结构化字段兼容验证且可回退到旧链路。
+- [文档] #1815 明确 JP/KR Phase 3 收敛时的兼容与回退路径：`MARKET_REVIEW_REGION=jp/kr` 仅扩展复盘输入；Market Light 告警、LLM provider/model/base URL、运行时配置持久化与清理语义保持不变，回退方式为恢复提交前 `.env`/配置快照或回滚提交。
 - [修复] 修复通知 Markdown 表格转换在空单元格后将后续内容错配到错误表头的问题。
 - [修复] 将 Docker 可安装的 Longbridge SDK 版本固定为 0.2.75，避免 `longbridge>=0.2.77` 从包索引消失后导致 docker-build 失败。
 - [修复] 持仓快照今日估值改为受限并发预取多只持仓实时价，减少持仓较多时 Web 组合页面刷新超时。
