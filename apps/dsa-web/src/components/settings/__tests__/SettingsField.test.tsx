@@ -120,7 +120,7 @@ describe('SettingsField', () => {
   it('renders multi-value select field as checkbox group and serializes updates', () => {
     const onChange = vi.fn();
 
-    const { rerender } = render(
+    render(
       <SettingsField
         item={{
           key: 'MARKET_REVIEW_REGION',
