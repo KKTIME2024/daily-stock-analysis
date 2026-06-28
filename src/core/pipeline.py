@@ -2104,6 +2104,58 @@ class StockAnalysisPipeline:
                     report_language,
                 )
 
+        # === 信号层：从 Python 预计算结果填充 factual 字段 ===
+        if trend_result is not None:
+            dashboard["summary"] = {
+                "trend_status": trend_result.trend_status.value if hasattr(trend_result.trend_status, 'value') else str(trend_result.trend_status),
+                "ma_alignment": trend_result.ma_alignment or "",
+                "trend_score": getattr(trend_result, "trend_strength", None) or getattr(trend_result, "signal_score", 50),
+                "bias_ma5": trend_result.bias_ma5,
+                "volume_status": trend_result.volume_status.value if hasattr(trend_result.volume_status, 'value') else str(trend_result.volume_status or ""),
+                "volume_trend": trend_result.volume_trend or "",
+            }
+            price_pos = dashboard.get("data_perspective", {}).get("price_position", {}) if isinstance(dashboard.get("data_perspective"), dict) else {}
+            dashboard["price_structure"] = {
+                "ma5": price_pos.get("ma5"),
+                "ma10": price_pos.get("ma10"),
+                "ma20": price_pos.get("ma20"),
+                "bias_ma5": price_pos.get("bias_ma5"),
+                "current_price": price_pos.get("current_price"),
+                "support_level": price_pos.get("support_level"),
+                "resistance_level": price_pos.get("resistance_level"),
+            }
+            signal_score = getattr(trend_result, "signal_score", None) or getattr(trend_result, "trend_strength", 50)
+            if self._is_agent_field_missing(dashboard.get("sentiment_score"), scalar=True):
+                dashboard["sentiment_score"] = int(signal_score) if signal_score else 50
+            if not dashboard.get("summary_score") or self._is_agent_field_missing(dashboard.get("summary_score"), scalar=True):
+                dashboard["summary_score"] = int(signal_score) if signal_score else 50
+
+        # === 信号层：从 Python 预计算结果填充 factual 字段 ===
+        if trend_result is not None:
+            dashboard["summary"] = {
+                "trend_status": trend_result.trend_status.value if hasattr(trend_result.trend_status, 'value') else str(trend_result.trend_status),
+                "ma_alignment": trend_result.ma_alignment or "",
+                "trend_score": getattr(trend_result, "trend_strength", None) or getattr(trend_result, "signal_score", 50),
+                "bias_ma5": trend_result.bias_ma5,
+                "volume_status": trend_result.volume_status.value if hasattr(trend_result.volume_status, 'value') else str(trend_result.volume_status or ""),
+                "volume_trend": trend_result.volume_trend or "",
+            }
+            price_pos = dashboard.get("data_perspective", {}).get("price_position", {}) if isinstance(dashboard.get("data_perspective"), dict) else {}
+            dashboard["price_structure"] = {
+                "ma5": price_pos.get("ma5"),
+                "ma10": price_pos.get("ma10"),
+                "ma20": price_pos.get("ma20"),
+                "bias_ma5": price_pos.get("bias_ma5"),
+                "current_price": price_pos.get("current_price"),
+                "support_level": price_pos.get("support_level"),
+                "resistance_level": price_pos.get("resistance_level"),
+            }
+            signal_score = getattr(trend_result, "signal_score", None) or getattr(trend_result, "trend_strength", 50)
+            if self._is_agent_field_missing(dashboard.get("sentiment_score"), scalar=True):
+                dashboard["sentiment_score"] = int(signal_score) if signal_score else 50
+            if not dashboard.get("summary_score") or self._is_agent_field_missing(dashboard.get("summary_score"), scalar=True):
+                dashboard["summary_score"] = int(signal_score) if signal_score else 50
+
     @staticmethod
     def _stop_loss_fallback_from_trend(
         trend_result: Optional[TrendAnalysisResult],

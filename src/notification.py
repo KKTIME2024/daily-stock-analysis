@@ -1756,77 +1756,75 @@ class NotificationService(
         return "\n".join(lines)
 
     def generate_single_stock_report(self, result: AnalysisResult) -> str:
-        """生成单只股票的市场信息摘要（纯事实，无投资建议）"""
-        report_date = datetime.now().strftime('%Y-%m-%d %H:%M')
+        """生成单只股票的市场信息摘要（信号由 Python 预计算，LLM 仅生成文本）"""
         report_language = self._get_report_language(result)
         labels = get_report_labels(report_language)
         dashboard = result.dashboard if hasattr(result, 'dashboard') and result.dashboard else {}
-        nd = dashboard.get('dashboard', {}) if dashboard else {}
         stock_name = self._get_display_name(result, report_language)
 
-        s = nd.get('summary', {}) or {}
-        ps = nd.get('price_structure', {}) or {}
-        ts = nd.get('trend_status', {}) or {}
-        intel = nd.get('intelligence', {}) or {}
-        ko = nd.get('key_observations', []) or []
-        summary_score = nd.get('summary_score', result.sentiment_score)
+        # 信号字段由 Python 预计算（在 _backfill_agent_dashboard_fields 中填充）
+        s = dashboard.get('summary', {}) or {}
+        ps = dashboard.get('price_structure', {}) or {}
+        ko = dashboard.get('key_observations', []) or []
+        risks = dashboard.get('risk_observations', []) or dashboard.get('intelligence', {}).get('risk_observations', []) or dashboard.get('intelligence', {}).get('risk_alerts', []) or []
+        analysis_summary = dashboard.get('analysis_summary', '') or result.analysis_summary or ''
+        summary_score = dashboard.get('summary_score', dashboard.get('sentiment_score', result.sentiment_score or 50))
 
-        lines = [
-            f"{stock_name} ({result.code})",
-            f"评分: {summary_score} | 趋势: {ts.get('trend', '')} | 动量: {ts.get('momentum', '')}",
-            "",
-        ]
-        cap = s.get('market_cap', '')
-        lines.append(
-            f"收盘: {s.get('current_price', 'N/A')} | "
-            f"涨跌幅: {s.get('change_pct', 'N/A')} | "
-            f"量比: {s.get('volume_ratio', 'N/A')} | "
-            f"换手率: {s.get('turnover_rate', 'N/A')}"
-            + (f" | 总市值: {cap}" if cap else "")
-        )
-        lines.append("")
-        lines.append(
-            f"均线: MA5={ps.get('ma5', 'N/A')} "
-            f"MA10={ps.get('ma10', 'N/A')} "
-            f"MA20={ps.get('ma20', 'N/A')} | "
-            f"乖离率: {ps.get('bias_ma5', 'N/A')}"
-        )
-        align = ts.get('ma_alignment', '')
-        if align:
-            lines.append(f"排列: {align[:60]}")
-        supp = ps.get('support_range', '')
-        res = ps.get('resistance_range', '')
-        if supp:
-            lines.append(f"支撑区间: {supp[:50]}")
-        if res:
-            lines.append(f"压力区间: {res[:50]}")
+        trend_status = s.get('trend_status', '')
+        ma_alignment = s.get('ma_alignment', '')
+        bias = s.get('bias_ma5', ps.get('bias_ma5', 'N/A'))
+
+        lines = [f"{stock_name} ({result.code})"]
+        score_text = f"评分: {summary_score}" if summary_score else ""
+        trend_text = f"趋势状态: {trend_status}" if trend_status else ""
+        lines.append(f"{score_text} | {trend_text}" if score_text and trend_text else score_text or trend_text or "")
         lines.append("")
 
+        # 行情快照（纯文本，无表格）
+        snapshot = getattr(result, 'market_snapshot', None)
+        if snapshot and isinstance(snapshot, dict):
+            parts = []
+            for label, key in [("收盘", "close"), ("涨跌幅", "pct_chg"), ("最高", "high"), ("最低", "low"),
+                               ("成交量", "volume"), ("成交额", "amount"), ("量比", "volume_ratio"), ("换手率", "turnover_rate")]:
+                val = snapshot.get(key)
+                if val is not None:
+                    parts.append(f"{label}={val}")
+            if parts:
+                lines.append("行情: " + " | ".join(parts))
+                lines.append("")
+
+        # 均线结构
+        ma5 = ps.get('ma5', 'N/A')
+        ma10 = ps.get('ma10', 'N/A')
+        ma20 = ps.get('ma20', 'N/A')
+        lines.append(f"均线: MA5={ma5} MA10={ma10} MA20={ma20} | 乖离率={bias}")
+        if ma_alignment:
+            lines.append(f"排列: {ma_alignment[:60]}")
+        support = ps.get('support_level')
+        resistance = ps.get('resistance_level')
+        if support:
+            lines.append(f"支撑区间: {support}")
+        if resistance:
+            lines.append(f"压力区间: {resistance}")
+        lines.append("")
+
+        # LLM 生成的文本摘要
+        if analysis_summary:
+            lines.append(analysis_summary[:120])
+            lines.append("")
+
+        # 关键观察
         for obs in ko[:3]:
-            lines.append(f"- {str(obs)[:80]}")
+            lines.append(f"- {str(obs)[:100]}")
         if ko:
             lines.append("")
 
-        risks = intel.get('risk_observations', []) or []
+        # 风险观察
         for r in risks[:3]:
-            lines.append(f"- {str(r)[:80]}")
+            lines.append(f"- {str(r)[:100]}")
         if risks:
             lines.append("")
 
-        sent = intel.get('sentiment_summary', '')
-        if sent:
-            lines.append(f"舆情: {str(sent)[:80]}")
-            lines.append("")
-
-        dls = nd.get('data_limitations', []) or []
-        if dls:
-            parts = []
-            for d in dls[:2]:
-                parts.append(str(d)[:40])
-            lines.append(f"数据说明: {'; '.join(parts)}")
-            lines.append("")
-
-        self._append_market_snapshot(lines, result)
         lines.append("---")
         if self._should_show_llm_model():
             mu = normalize_model_used(getattr(result, "model_used", None))
