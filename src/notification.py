@@ -1756,102 +1756,83 @@ class NotificationService(
         return "\n".join(lines)
 
     def generate_single_stock_report(self, result: AnalysisResult) -> str:
-        """
-        生成单只股票的分析报告（用于单股推送模式 #55）
-
-        使用市场信息摘要格式（纯事实，无投资建议）
-
-        Args:
-            result: 单只股票的分析结果
-
-        Returns:
-            文本格式的单股报告
-        """
+        """生成单只股票的市场信息摘要（纯事实，无投资建议）"""
         report_date = datetime.now().strftime('%Y-%m-%d %H:%M')
         report_language = self._get_report_language(result)
         labels = get_report_labels(report_language)
         dashboard = result.dashboard if hasattr(result, 'dashboard') and result.dashboard else {}
-        nd = dashboard.get('dashboard', {}) if dashboard else {}  # nested dashboard from new schema
-
+        nd = dashboard.get('dashboard', {}) if dashboard else {}
         stock_name = self._get_display_name(result, report_language)
 
-        # 读取新 schema 字段
-        s = nd.get('summary', {}) if nd else {}
-        ps = nd.get('price_structure', {}) if nd else {}
-        ts = nd.get('trend_status', {}) if nd else {}
-        intel = nd.get('intelligence', {}) if nd else {}
-        ko = nd.get('key_observations', []) if nd else []
+        s = nd.get('summary', {}) or {}
+        ps = nd.get('price_structure', {}) or {}
+        ts = nd.get('trend_status', {}) or {}
+        intel = nd.get('intelligence', {}) or {}
+        ko = nd.get('key_observations', []) or []
         summary_score = nd.get('summary_score', result.sentiment_score)
-
-        current_price = s.get('current_price', 'N/A')
-        change_pct = s.get('change_pct', 'N/A')
-        volume_ratio = s.get('volume_ratio', 'N/A')
-        turnover_rate = s.get('turnover_rate', 'N/A')
-        market_cap = s.get('market_cap', '')
-
-        ma5 = ps.get('ma5', 'N/A')
-        ma10 = ps.get('ma10', 'N/A')
-        ma20 = ps.get('ma20', 'N/A')
-        bias = ps.get('bias_ma5', 'N/A')
-        support = ps.get('support_range', '')
-        resistance = ps.get('resistance_range', '')
-
-        trend = ts.get('trend', '')
-        momentum = ts.get('momentum', '')
-        volatility = ts.get('volatility', '')
-        ma_alignment = ts.get('ma_alignment', '')
 
         lines = [
             f"{stock_name} ({result.code})",
-            f"评分: {summary_score} | 趋势: {trend} | 动量: {momentum}",
+            f"评分: {summary_score} | 趋势: {ts.get('trend', '')} | 动量: {ts.get('momentum', '')}",
             "",
         ]
-
-        cap_line = f" | 总市值: {market_cap}" if market_cap else ""
-        lines.append(f"收盘: {current_price} | 涨跌幅: {change_pct} | 量比: {volume_ratio} | 换手率: {turnover_rate}{cap_line}")
+        cap = s.get('market_cap', '')
+        lines.append(
+            f"收盘: {s.get('current_price', 'N/A')} | "
+            f"涨跌幅: {s.get('change_pct', 'N/A')} | "
+            f"量比: {s.get('volume_ratio', 'N/A')} | "
+            f"换手率: {s.get('turnover_rate', 'N/A')}"
+            + (f" | 总市值: {cap}" if cap else "")
+        )
+        lines.append("")
+        lines.append(
+            f"均线: MA5={ps.get('ma5', 'N/A')} "
+            f"MA10={ps.get('ma10', 'N/A')} "
+            f"MA20={ps.get('ma20', 'N/A')} | "
+            f"乖离率: {ps.get('bias_ma5', 'N/A')}"
+        )
+        align = ts.get('ma_alignment', '')
+        if align:
+            lines.append(f"排列: {align[:60]}")
+        supp = ps.get('support_range', '')
+        res = ps.get('resistance_range', '')
+        if supp:
+            lines.append(f"支撑区间: {supp[:50]}")
+        if res:
+            lines.append(f"压力区间: {res[:50]}")
         lines.append("")
 
-        lines.append(f"均线: MA5={ma5} MA10={ma10} MA20={ma20} | 乖离率: {bias}")
-        if ma_alignment:
-            lines.append(f"排列: {ma_alignment[:60]}")
-        if support:
-            lines.append(f"支撑区间: {support[:50]}")
-        if resistance:
-            lines.append(f"压力区间: {resistance[:50]}")
-        lines.append("")
-
+        for obs in ko[:3]:
+            lines.append(f"- {str(obs)[:80]}")
         if ko:
-            lines.append("关键观察:")
-            for obs in ko[:3]:
-                lines.append(f"- {str(obs)[:80]}")
             lines.append("")
 
-        risks = intel.get('risk_observations', []) if intel else []
+        risks = intel.get('risk_observations', []) or []
+        for r in risks[:3]:
+            lines.append(f"- {str(r)[:80]}")
         if risks:
-            lines.append("风险观察:")
-            for r in risks[:3]:
-                lines.append(f"- {str(r)[:80]}")
             lines.append("")
 
-        sentiment = intel.get('sentiment_summary', '') if intel else ''
-        if sentiment:
-            lines.append(f"舆情: {str(sentiment)[:80]}")
+        sent = intel.get('sentiment_summary', '')
+        if sent:
+            lines.append(f"舆情: {str(sent)[:80]}")
             lines.append("")
 
-        dls = nd.get('data_limitations', []) if nd else []
+        dls = nd.get('data_limitations', []) or []
         if dls:
-            lines.append(f"数据说明: {'; '.join(str(d)[:40] for d in dls[:2])}")
+            parts = []
+            for d in dls[:2]:
+                parts.append(str(d)[:40])
+            lines.append(f"数据说明: {'; '.join(parts)}")
             lines.append("")
 
         self._append_market_snapshot(lines, result)
-
         lines.append("---")
         if self._should_show_llm_model():
-            model_used = normalize_model_used(getattr(result, "model_used", None))
-            if model_used:
-                lines.append(f"模型: {model_used}")
+            mu = normalize_model_used(getattr(result, "model_used", None))
+            if mu:
+                lines.append(f"模型: {mu}")
         lines.append(f"*{labels.get('not_investment_advice', '本报告仅作信息参考')}*")
-
         return "\n".join(lines)
 
     # Display name mapping for realtime data sources
