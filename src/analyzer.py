@@ -1784,78 +1784,32 @@ class GeminiAnalyzer:
 
 """ + CORE_TRADING_SKILL_POLICY_ZH + """
 
-## 输出格式：市场信息摘要 JSON
+## 输出格式
 
 请严格按照以下 JSON 格式输出：
 
 ```json
 {
     "stock_name": "股票中文名称",
-    "summary_score": 0-100整数,
-
-    "dashboard": {
-        "summary": {
-            "current_price": 当前价格数值,
-            "change_pct": 涨跌幅百分比数值,
-            "volume_ratio": 量比数值,
-            "turnover_rate": 换手率百分比数值,
-            "market_cap": "总市值字符串"
-        },
-        "price_structure": {
-            "ma5": MA5数值,
-            "ma10": MA10数值,
-            "ma20": MA20数值,
-            "bias_ma5": 乖离率百分比数值,
-            "support_range": "支撑区间描述",
-            "resistance_range": "压力区间描述"
-        },
-        "trend_status": {
-            "trend": "上升/震荡/下降",
-            "momentum": "增强/减弱/中性",
-            "volatility": "收敛/扩大/正常",
-            "ma_alignment": "均线排列状态描述"
-        },
-        "intelligence": {
-            "latest_news": "近3日新闻摘要",
-            "risk_observations": ["客观风险描述1", "客观风险描述2"],
-            "earnings_outlook": "业绩预期分析",
-            "sentiment_summary": "舆情情绪总结"
-        },
-        "key_observations": [
-            "观察点1（纯描述，不含建议）",
-            "观察点2（纯描述，不含建议）"
-        ],
-        "data_limitations": ["数据限制说明1", "数据限制说明2"]
-    },
-    "analysis_summary": "80字以内综合状态摘要",
-    "trend_analysis": "走势形态分析",
-    "ma_analysis": "均线系统分析",
-    "volume_analysis": "量能分析",
-    "fundamental_analysis": "基本面分析（数据缺失则不写）",
-    "sector_position": "板块行业位置",
-    "news_summary": "新闻摘要",
-    "market_sentiment": "市场情绪描述",
-    "data_sources": "数据来源说明"
+    "analysis_summary": "60字以内综合状态摘要，基于数据简要描述当日走势特征，不含买卖建议",
+    "key_observations": [
+        "观察点1（纯描述，不含建议）",
+        "观察点2（纯描述，不含建议）"
+    ],
+    "risk_observations": [
+        "客观风险描述（不含建议，如PE偏高、均线空头等）"
+    ]
 }
 ```
 
 ## 信息摘要核心规范
 
-1. 只描述，不决策：所有输出必须是客观事实或状态描述
-2. 结构化优先：数据优先用数值、区间、枚举值表达
-3. 禁止输出：买入/卖出/加仓/减仓/止损/目标价/看多/看空/持有观望等任何交易建议
-4. 禁止命令语气：不要写建议/应该/果断/必须等措辞
-5. 禁止仓位建议：不要写空仓者/持仓者分类建议
-6. 风险描述化：风险点只写客观事实，不写建议减仓
-7. 支撑/压力用区间：写参考区间而非止损/目标
-
-## 语言规范（最高优先级）
-
-- 所有 JSON 键名保持不变。
-- 所有面向用户的人类可读文本值必须使用中文，且为纯文本格式。
-- 禁止在文本值中使用 Markdown 格式符号。
-- 使用下降趋势而非强烈看空，使用价格偏高而非坚决不买。
-- 如数据缺失，直接写数据缺失即可，不要编造。"""
+1. 只描述，不决策：所有文本输出必须是客观事实或状态描述
+2. 禁止输出：买入/卖出/加仓/减仓/止损/目标价/看多/看空/持有观望等任何交易建议
+3. 禁止命令语气：不要写建议/应该/果断/必须等措辞
+4. 禁止仓位建议：不要写空仓者/持仓者分类建议
+5. 禁止在文本中使用 Markdown 格式符号（# * - > [] 等）
+6. 如数据缺失，直接写数据缺失即可，不要编造"""
 
     SYSTEM_PROMPT = """你是一位{market_placeholder}金融信息摘要助手。你的任务是基于提供的行情数据和预计算的技术指标，输出简洁的中文状态摘要。
 
