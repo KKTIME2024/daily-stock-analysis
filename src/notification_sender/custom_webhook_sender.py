@@ -7,6 +7,7 @@
 """
 import logging
 import json
+import re
 import time
 from string import Template
 from typing import Any, Dict, List, Optional, Tuple
@@ -303,11 +304,22 @@ class CustomWebhookSender:
                 "mrkdwn": True
             }
         
-        # Bark (iOS 推送)
+        # Bark (iOS 推送) - 不渲染 Markdown，需剥离格式
         if 'api.day.app' in url_lower:
+            plain = content
+            plain = re.sub(r'#{1,6}\s*', '', plain)       # 移除 #
+            plain = re.sub(r'\*\*(.+?)\*\*', r'\1', plain)   # **bold** -> bold
+            plain = re.sub(r'\*(.+?)\*', r'\1', plain)       # *italic* -> italic
+            plain = re.sub(r'`{1,3}[^`]*`{1,3}', '', plain)  # 移除 `code`
+            plain = re.sub(r'^[-*+]\s+', '', plain, flags=re.MULTILINE)  # 列表符号
+            plain = re.sub(r'^\d+\.\s+', '', plain, flags=re.MULTILINE)  # 数字列表
+            plain = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', plain)      # [text](url) -> text
+            plain = re.sub(r'^\s*>\s*', '', plain, flags=re.MULTILINE)   # blockquote >
+            plain = re.sub(r'\n{3,}', '\n\n', plain)       # 压缩多余空行
+            plain = plain.strip()
             return {
                 "title": "股票分析报告",
-                "body": content[:4000],  # Bark 限制
+                "body": plain[:4000],  # Bark 限制
                 "group": "stock"
             }
         

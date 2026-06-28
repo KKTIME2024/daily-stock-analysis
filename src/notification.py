@@ -1759,159 +1759,98 @@ class NotificationService(
         """
         生成单只股票的分析报告（用于单股推送模式 #55）
 
-        格式精简但信息完整，适合每分析完一只股票立即推送
+        使用市场信息摘要格式（纯事实，无投资建议）
 
         Args:
             result: 单只股票的分析结果
 
         Returns:
-            Markdown 格式的单股报告
+            文本格式的单股报告
         """
         report_date = datetime.now().strftime('%Y-%m-%d %H:%M')
         report_language = self._get_report_language(result)
         labels = get_report_labels(report_language)
-        signal_text, signal_emoji, _ = self._get_signal_level(result)
         dashboard = result.dashboard if hasattr(result, 'dashboard') and result.dashboard else {}
-        core = dashboard.get('core_conclusion', {}) if dashboard else {}
-        battle = dashboard.get('battle_plan', {}) if dashboard else {}
-        intel = dashboard.get('intelligence', {}) if dashboard else {}
+        nd = dashboard.get('dashboard', {}) if dashboard else {}  # nested dashboard from new schema
 
-        # 股票名称（转义 *ST 等特殊字符）
         stock_name = self._get_display_name(result, report_language)
 
+        # 读取新 schema 字段
+        s = nd.get('summary', {}) if nd else {}
+        ps = nd.get('price_structure', {}) if nd else {}
+        ts = nd.get('trend_status', {}) if nd else {}
+        intel = nd.get('intelligence', {}) if nd else {}
+        ko = nd.get('key_observations', []) if nd else []
+        summary_score = nd.get('summary_score', result.sentiment_score)
+
+        current_price = s.get('current_price', 'N/A')
+        change_pct = s.get('change_pct', 'N/A')
+        volume_ratio = s.get('volume_ratio', 'N/A')
+        turnover_rate = s.get('turnover_rate', 'N/A')
+        market_cap = s.get('market_cap', '')
+
+        ma5 = ps.get('ma5', 'N/A')
+        ma10 = ps.get('ma10', 'N/A')
+        ma20 = ps.get('ma20', 'N/A')
+        bias = ps.get('bias_ma5', 'N/A')
+        support = ps.get('support_range', '')
+        resistance = ps.get('resistance_range', '')
+
+        trend = ts.get('trend', '')
+        momentum = ts.get('momentum', '')
+        volatility = ts.get('volatility', '')
+        ma_alignment = ts.get('ma_alignment', '')
+
         lines = [
-            f"## {signal_emoji} {stock_name} ({result.code})",
-            "",
-            f"> {report_date} | {labels['score_label']}: **{result.sentiment_score}** | {localize_trend_prediction(result.trend_prediction, report_language)}",
+            f"{stock_name} ({result.code})",
+            f"评分: {summary_score} | 趋势: {trend} | 动量: {momentum}",
             "",
         ]
 
-        excerpt = self._public_phase_pack_excerpt(result, report_language)
-        if excerpt:
-            lines.extend([excerpt, ""])
+        cap_line = f" | 总市值: {market_cap}" if market_cap else ""
+        lines.append(f"收盘: {current_price} | 涨跌幅: {change_pct} | 量比: {volume_ratio} | 换手率: {turnover_rate}{cap_line}")
+        lines.append("")
 
-        signal_excerpt = self._decision_signal_excerpt(result, report_language)
-        if signal_excerpt:
-            lines.extend([signal_excerpt, ""])
+        lines.append(f"均线: MA5={ma5} MA10={ma10} MA20={ma20} | 乖离率: {bias}")
+        if ma_alignment:
+            lines.append(f"排列: {ma_alignment[:60]}")
+        if support:
+            lines.append(f"支撑区间: {support[:50]}")
+        if resistance:
+            lines.append(f"压力区间: {resistance[:50]}")
+        lines.append("")
+
+        if ko:
+            lines.append("关键观察:")
+            for obs in ko[:3]:
+                lines.append(f"- {str(obs)[:80]}")
+            lines.append("")
+
+        risks = intel.get('risk_observations', []) if intel else []
+        if risks:
+            lines.append("风险观察:")
+            for r in risks[:3]:
+                lines.append(f"- {str(r)[:80]}")
+            lines.append("")
+
+        sentiment = intel.get('sentiment_summary', '') if intel else ''
+        if sentiment:
+            lines.append(f"舆情: {str(sentiment)[:80]}")
+            lines.append("")
+
+        dls = nd.get('data_limitations', []) if nd else []
+        if dls:
+            lines.append(f"数据说明: {'; '.join(str(d)[:40] for d in dls[:2])}")
+            lines.append("")
 
         self._append_market_snapshot(lines, result)
-
-        # 核心决策（一句话）
-        one_sentence = core.get('one_sentence', result.analysis_summary) if core else result.analysis_summary
-        if one_sentence:
-            lines.extend([
-                f"### 📌 {labels['core_conclusion_heading']}",
-                "",
-                f"**{signal_text}**: {one_sentence}",
-                "",
-            ])
-
-        # 重要信息（舆情+基本面）
-        info_added = False
-        if intel:
-            if intel.get('earnings_outlook'):
-                if not info_added:
-                    lines.append(f"### 📰 {labels['info_heading']}")
-                    lines.append("")
-                    info_added = True
-                lines.append(f"📊 **{labels['earnings_outlook_label']}**: {str(intel['earnings_outlook'])[:100]}")
-
-            if intel.get('sentiment_summary'):
-                if not info_added:
-                    lines.append(f"### 📰 {labels['info_heading']}")
-                    lines.append("")
-                    info_added = True
-                lines.append(f"💭 **{labels['sentiment_summary_label']}**: {str(intel['sentiment_summary'])[:80]}")
-
-            # 风险警报
-            risks = intel.get('risk_alerts', [])
-            if risks:
-                if not info_added:
-                    lines.append(f"### 📰 {labels['info_heading']}")
-                    lines.append("")
-                    info_added = True
-                lines.append("")
-                lines.append(f"🚨 **{labels['risk_alerts_label']}**:")
-                for risk in risks[:3]:
-                    lines.append(f"- {str(risk)[:60]}")
-
-            # 利好催化
-            catalysts = intel.get('positive_catalysts', [])
-            if catalysts:
-                lines.append("")
-                lines.append(f"✨ **{labels['positive_catalysts_label']}**:")
-                for cat in catalysts[:3]:
-                    lines.append(f"- {str(cat)[:60]}")
-
-        if info_added:
-            lines.append("")
-
-        # 狙击点位
-        sniper = battle.get('sniper_points', {}) if battle else {}
-        if sniper:
-            lines.extend([
-                f"### 🎯 {labels['action_points_heading']}",
-                "",
-                f"| {labels['ideal_buy_label']} | {labels['stop_loss_label']} | {labels['take_profit_label']} |",
-                "|------|------|------|",
-            ])
-            ideal_buy = sniper.get('ideal_buy', '-')
-            stop_loss = sniper.get('stop_loss', '-')
-            take_profit = sniper.get('take_profit', '-')
-            lines.append(f"| {ideal_buy} | {stop_loss} | {take_profit} |")
-            lines.append("")
-
-        # ========== 信号归因分析 ==========
-        signal_attr = dashboard.get('signal_attribution', {}) if dashboard else {}
-        if signal_attribution_has_content(signal_attr):
-            lines.extend([
-                f"### 🎯 {labels.get('signal_attribution_heading', '信号归因分析')}",
-                "",
-            ])
-            # 归因权重
-            weight_items = signal_attribution_weight_items(signal_attr)
-            if weight_items:
-                lines.append(f"**{labels.get('attribution_weights_label', '归因权重')}**:")
-                weight_labels = {
-                    "technical_indicators": ("📈", labels.get('technical_indicators_label', '技术指标')),
-                    "news_sentiment": ("📰", labels.get('news_sentiment_label', '新闻舆情')),
-                    "fundamentals": ("📊", labels.get('fundamentals_label', '基本面')),
-                    "market_conditions": ("🌐", labels.get('market_conditions_label', '市场环境')),
-                }
-                for key, value in weight_items:
-                    icon, label = weight_labels[key]
-                    lines.append(f"- {icon} {label}: {value}%")
-                lines.append("")
-
-            # 最强信号
-            bullish = signal_attr.get('strongest_bullish_signal')
-            bearish = signal_attr.get('strongest_bearish_signal')
-            if bullish:
-                lines.append(f"**🐂 {labels.get('strongest_bullish_signal_label', '最强看多信号')}**: {bullish}")
-            if bearish:
-                lines.append(f"**🐻 {labels.get('strongest_bearish_signal_label', '最强看空信号')}**: {bearish}")
-            lines.append("")
-
-        # 持仓建议
-        pos_advice = core.get('position_advice', {}) if core else {}
-        if pos_advice:
-            lines.extend([
-                f"### 💼 {labels['position_advice_heading']}",
-                "",
-                f"- 🆕 **{labels['no_position_label']}**: {pos_advice.get('no_position', localize_operation_advice(result.operation_advice, report_language))}",
-                f"- 💼 **{labels['has_position_label']}**: {pos_advice.get('has_position', labels['continue_holding'])}",
-                "",
-            ])
-
-        # 财务摘要 / 股东回报 / 关联板块（数据缺失时自动隐藏对应小节）
-        self._append_fundamental_blocks(lines, result)
 
         lines.append("---")
         if self._should_show_llm_model():
             model_used = normalize_model_used(getattr(result, "model_used", None))
             if model_used:
-                lines.append(f"*{labels['analysis_model_label']}: {model_used}*")
-        lines.append(f"*{labels['not_investment_advice']}*")
+                lines.append(f"模型: {model_used}")
+        lines.append(f"*{labels.get('not_investment_advice', '本报告仅作信息参考')}*")
 
         return "\n".join(lines)
 
