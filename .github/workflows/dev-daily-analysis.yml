@@ -1,8 +1,6 @@
 name: 每日分析(dev)
 
 on:
-  schedule:
-    - cron: '0 10 * * 1-5'
   workflow_dispatch:
 
 jobs:
