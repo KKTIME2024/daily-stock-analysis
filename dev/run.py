@@ -358,42 +358,25 @@ def format_report(market_data, llm_output, usage):
         lines.append("")
 
     news = market_data.get("news") or {}
-    lines.append("\u2501\u2501\u2501 \u516d\u3001\u76d8\u524d\u53d8\u91cf \u2501\u2501\u2501")
     if news:
-        for query, results in list(news.items())[:8]:
-            if results:
-                lines.append(f"  \U0001f50d {query}")
-                for r in results[:2]:
-                    lines.append(f"    {r['title']}")
-                    if r["body"]: lines.append(f"    {r['body'][:120]}")
-        news_count = sum(1 for r in news.values() if r)
-        lines.append(f"  > \u65b0\u95fb\u641c\u7d22: {news_count}/{len(news)} \u7ec4\u67e5\u8be2\u6709\u7ed3\u679c (DuckDuckGo)")
-    else:
-        lines.append("  \u274c \u65b0\u95fb\u641c\u7d22\u5931\u8d25")
-    lines.append("")
-
-    lines.append("\u2501\u2501\u2501 \u4e03\u3001\u6570\u636e\u900f\u660e\u5ea6 \u2501\u2501\u2501")
-    for name in INDEX_KEYWORDS:
-        if indices.get(name):
-            lines.append(f"  \u2705 {name}\u6536\u76d8 \u2014 efinance \u5355\u6e90")
-    lines.append(f"  {'\u2705' if sectors.get('top') else '\u274c'} \u884c\u4e1a\u677f\u5757\u6da8\u8dcc\u699c \u2014 efinance \u5355\u6e90")
-    lines.append(f"  {'\u2705' if bb else '\u274c'} \u9f99\u864e\u699c \u2014 efinance \u5355\u6e90")
-    for code, sd in stocks_data.items():
-        name = sd["name"]
-        tech = "\u2705" if sd.get("signals") else "\u274c"
-        fund = "\u2705" if sd.get("fund_flow") else "\u274c"
-        base_s = "\u2705" if sd.get("base_info") else "\u274c"
-        lines.append(f"  {tech} {name}({code}) K\u7ebf/\u6280\u672f \u2014 efinance \u5355\u6e90")
-        lines.append(f"  {fund} {name}({code}) \u8d44\u91d1\u6d41(\u8fd15\u65e5) \u2014 efinance \u5355\u6e90")
-        lines.append(f"  {base_s} {name}({code}) \u57fa\u672c\u9762 \u2014 efinance \u5355\u6e90")
-    news = market_data.get("news") or {}
-    if news:
-        nc = sum(1 for r in news.values() if r)
-        lines.append(f"  \u2705 \u65b0\u95fb\u641c\u7d22 — DuckDuckGo ({nc}/{len(news)}\u7ec4\u6709\u7ed3\u679c)")
-    else:
-        lines.append("  \u274c \u65b0\u95fb/\u4e8b\u4ef6/\u76d8\u524d\u53d8\u91cf \u2014 \u672a\u63a5\u5165\u641c\u7d22API")
-    lines.append("  \u274c \u5317\u5411\u8d44\u91d1 \u2014 \u672a\u83b7\u53d6")
-    lines.append("  \u274c \u878d\u8d44\u878d\u5238 \u2014 \u672a\u83b7\u53d6")
+        lines.append("\u2501\u2501\u2501 \u516d\u3001\u76f8\u5173\u65b0\u95fb \u2501\u2501\u2501")
+        stock_news = {}
+        for query, results in news.items():
+            if not results: continue
+            for code in market_data["stocks"]:
+                if code in query or market_data["stocks"][code]["name"] in query:
+                    stock_news.setdefault(code, []).append((query, results[0]))
+        for code, items in stock_news.items():
+            lines.append(f"  \U0001f4f0 {market_data['stocks'][code]['name']}({code}):")
+            for q, r in items[:3]:
+                lines.append(f"    {r['title']}")
+        other = [(q, r[0]) for q, r in news.items() if r and not any(
+            code in q or market_data["stocks"][code]["name"] in q for code in market_data["stocks"]
+        )]
+        if other:
+            lines.append(f"  \U0001f4f0 \u5176\u4ed6:")
+            for q, r in other[:3]:
+                lines.append(f"    {r['title'][:80]}")
     lines.append("")
 
     cost_str = ""
@@ -516,26 +499,28 @@ def send_bark(title, body):
     print(f"  [OK] Bark \u63a8\u9001 {len(parts)}\u6761")
 
 def _split_bark_body(body):
-    lines = body.split("\n")
-    chunks, cur = [], []
+    lines, chunks, cur = body.split("\n"), [], []
+    limit = 7000
     for line in lines:
         s = line.strip()
         if not s: continue
-        if s.startswith("\u2501\u2501\u2501 \u516d") or s.startswith("\u2501\u2501\u2501 \u4e03"):
-            break
-        if len("\n".join(cur + [s])) > 2000:
+        if s.startswith("\u2501\u2501\u2501 \u516d"): break
+        test = "\n".join(cur + [s])
+        if len(test.encode()) > limit:
             chunks.append("\n".join(cur))
             cur = [s]
         else:
             cur.append(s)
     if cur: chunks.append("\n".join(cur))
-    return chunks[:3]
+    return chunks[:4]
 
 def main():
     import argparse
     p = argparse.ArgumentParser()
     p.add_argument("--stocks", type=str)
     p.add_argument("--no-llm", action="store_true")
+    p.add_argument("--mode", choices=["full", "pre"], default="full",
+                   help="full=\u6536\u76d8\u5206\u6790, pre=\u76d8\u524d\u65b0\u95fb")
     args = p.parse_args()
 
     stock_list = STOCKS
@@ -545,49 +530,58 @@ def main():
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     print("=" * 50)
-    print("Phase 1: \u6570\u636e\u83b7\u53d6"); print("=" * 50)
+    print(f"Phase 1: \u6570\u636e\u83b7\u53d6 (mode={args.mode})"); print("=" * 50)
     market_data = {"indices": {}, "sectors": {}, "billboard": [], "stocks": {}}
 
-    print("\n[\u6307\u6570]"); time.sleep(0.5)
-    market_data["indices"] = fetch_index_quotes()
-    for n, d in market_data["indices"].items(): print(f"  {n}: {d['close']} ({d['chg_pct']:+.2f}%)")
+    if args.mode == "pre":
+        for code in stock_list:
+            sd = {"name": code, "signals": {}, "fund_flow": None, "base_info": {}}
+            time.sleep(0.5)
+            df = fetch_stock_kline(code)
+            if df is not None and len(df) > 0:
+                sd["name"] = str(df.iloc[-1].get("\u80a1\u7968\u540d\u79f0", code))
+            market_data["stocks"][code] = sd
+    else:
+        print("\n[\u6307\u6570]"); time.sleep(0.5)
+        market_data["indices"] = fetch_index_quotes()
+        for n, d in market_data["indices"].items(): print(f"  {n}: {d['close']} ({d['chg_pct']:+.2f}%)")
 
-    print("\n[\u677f\u5757]"); time.sleep(0.5)
-    market_data["sectors"] = fetch_sector_rankings(5)
-    print(f"  \u9886\u6da8: {', '.join(s['name'] for s in market_data['sectors']['top']) or '\u65e0'}")
-    print(f"  \u9886\u8dcc: {', '.join(s['name'] for s in market_data['sectors']['bottom']) or '\u65e0'}")
+        print("\n[\u677f\u5757]"); time.sleep(0.5)
+        market_data["sectors"] = fetch_sector_rankings(5)
+        print(f"  \u9886\u6da8: {', '.join(s['name'] for s in market_data['sectors']['top']) or '\u65e0'}")
+        print(f"  \u9886\u8dcc: {', '.join(s['name'] for s in market_data['sectors']['bottom']) or '\u65e0'}")
 
-    print("\n[\u9f99\u864e\u699c]"); time.sleep(0.5)
-    market_data["billboard"] = fetch_billboard()
-    print(f"  \u4e0a\u699c: {len(market_data['billboard'])}\u53ea")
+        print("\n[\u9f99\u864e\u699c]"); time.sleep(0.5)
+        market_data["billboard"] = fetch_billboard()
+        print(f"  \u4e0a\u699c: {len(market_data['billboard'])}\u53ea")
 
-    for code in stock_list:
-        print(f"\n[{code}]")
-        sd = {"name": code, "signals": {}, "fund_flow": None, "base_info": {}}
+        for code in stock_list:
+            print(f"\n[{code}]")
+            sd = {"name": code, "signals": {}, "fund_flow": None, "base_info": {}}
 
-        time.sleep(0.5)
-        df = fetch_stock_kline(code)
-        if df is not None and len(df) > 0:
-            sd["name"] = str(df.iloc[-1].get("\u80a1\u7968\u540d\u79f0", code))
-            sd["signals"] = compute_signals(df)
-            print(f"  {sd['name']}: {sd['signals'].get('close','?')} "
-                  f"{_arrow(sd['signals'].get('chg_pct',0))}{sd['signals'].get('chg_pct',0):.2f}%")
-        else: print(f"  [WARN] K\u7ebf\u4e3a\u7a7a")
+            time.sleep(0.5)
+            df = fetch_stock_kline(code)
+            if df is not None and len(df) > 0:
+                sd["name"] = str(df.iloc[-1].get("\u80a1\u7968\u540d\u79f0", code))
+                sd["signals"] = compute_signals(df)
+                print(f"  {sd['name']}: {sd['signals'].get('close','?')} "
+                      f"{_arrow(sd['signals'].get('chg_pct',0))}{sd['signals'].get('chg_pct',0):.2f}%")
+            else: print(f"  [WARN] K\u7ebf\u4e3a\u7a7a")
 
-        time.sleep(0.5)
-        fund = fetch_stock_fund_flow(code, days=5)
-        if fund:
-            sd["fund_flow"] = fund
-            print(f"  \u4e3b\u529b: {_money(fund[0]['main_net'])} (\u8fd15\u65e5)")
-        else: print(f"  \u8d44\u91d1\u6d41: \u672a\u83b7\u53d6")
+            time.sleep(0.5)
+            fund = fetch_stock_fund_flow(code, days=5)
+            if fund:
+                sd["fund_flow"] = fund
+                print(f"  \u4e3b\u529b: {_money(fund[0]['main_net'])} (\u8fd15\u65e5)")
+            else: print(f"  \u8d44\u91d1\u6d41: \u672a\u83b7\u53d6")
 
-        time.sleep(0.5)
-        base = fetch_stock_base_info(code)
-        if base:
-            sd["base_info"] = base
-            print(f"  PE:{base.get('\u5e02\u76c8\u7387(\u52a8)','?')} PB:{base.get('\u5e02\u51c0\u7387','?')} {base.get('\u6240\u5904\u884c\u4e1a','?')}")
+            time.sleep(0.5)
+            base = fetch_stock_base_info(code)
+            if base:
+                sd["base_info"] = base
+                print(f"  PE:{base.get('\u5e02\u76c8\u7387(\u52a8)','?')} PB:{base.get('\u5e02\u51c0\u7387','?')} {base.get('\u6240\u5904\u884c\u4e1a','?')}")
 
-        market_data["stocks"][code] = sd
+            market_data["stocks"][code] = sd
 
     print("\n[\u65b0\u95fb] \u89e6\u53d1\u5668\u751f\u6210\u641c\u7d22\u8bcd...")
     queries = generate_news_queries(market_data)
@@ -605,7 +599,7 @@ def main():
     print(f"  \u6709\u6548\u7ed3\u679c: {sum(1 for r in news_results.values() if r)}/{len(queries)} \u7ec4")
 
     llm_output = None; usage = None
-    if not args.no_llm:
+    if args.mode != "pre" and not args.no_llm:
         print("\n\u8c03\u7528 LLM...")
         try:
             resp = client.chat.completions.create(
