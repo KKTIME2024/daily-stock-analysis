@@ -498,7 +498,8 @@ def send_bark(title, body):
         if s.startswith("\u2501\u2501\u2501 \u516d") or s.startswith("\u2501\u2501\u2501 \u4e03"):
             break
         keep.append(s)
-    short = "\n".join(keep)[:1200]
+    import re
+    short = re.sub(r'[\U0001f300-\U0001ffff\u2600-\u27bf\u2500-\u257f]', '', "\n".join(keep))[:500]
     for url in urls.split(","):
         url = url.strip()
         if not url: continue
