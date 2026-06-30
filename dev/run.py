@@ -490,11 +490,12 @@ def send_bark(title, body):
     if not urls:
         print("  [SKIP] CUSTOM_WEBHOOK_URLS \u672a\u914d\u7f6e"); return
     import urllib.request, urllib.parse
+    short = body[:1500]
     for url in urls.split(","):
         url = url.strip()
         if not url: continue
         try:
-            full = f"{url}/{urllib.parse.quote(title)}/{urllib.parse.quote(body)}"
+            full = f"{url}/{urllib.parse.quote(title)}/{urllib.parse.quote(short)}"
             urllib.request.urlopen(full, timeout=10)
             print(f"  [OK] Bark \u63a8\u9001\u6210\u529f ({url[:30]}...)")
         except Exception as e: print(f"  [WARN] Bark({url[:30]}...): {e}")
