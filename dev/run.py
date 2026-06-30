@@ -498,24 +498,38 @@ def send_bark(title, body):
     urls = os.environ.get("CUSTOM_WEBHOOK_URLS", "")
     if not urls:
         print("  [SKIP] CUSTOM_WEBHOOK_URLS \u672a\u914d\u7f6e"); return
-    import urllib.request, urllib.parse
+    import urllib.request, json
+    parts = _split_bark_body(body)
+    for i, part in enumerate(parts):
+        t = title if i == 0 else f"{title} ({i+1}/{len(parts)})"
+        for raw in urls.split(","):
+            raw = raw.strip()
+            if not raw: continue
+            key = raw.rstrip("/").split("/")[-1]
+            try:
+                data = json.dumps({"device_key": key, "title": t, "body": part}).encode()
+                req = urllib.request.Request("https://api.day.app/push", data=data,
+                    headers={"Content-Type": "application/json"})
+                urllib.request.urlopen(req, timeout=10)
+            except Exception as e:
+                print(f"  [WARN] Bark part{i}({key[:12]}): {e}")
+    print(f"  [OK] Bark \u63a8\u9001 {len(parts)}\u6761")
+
+def _split_bark_body(body):
     lines = body.split("\n")
-    keep = []
+    chunks, cur = [], []
     for line in lines:
         s = line.strip()
         if not s: continue
         if s.startswith("\u2501\u2501\u2501 \u516d") or s.startswith("\u2501\u2501\u2501 \u4e03"):
             break
-        keep.append(s)
-    short = "\n".join(keep)[:800]
-    for url in urls.split(","):
-        url = url.strip()
-        if not url: continue
-        try:
-            full = f"{url}/{urllib.parse.quote(title)}/{urllib.parse.quote(short)}"
-            urllib.request.urlopen(full, timeout=10)
-            print(f"  [OK] Bark \u63a8\u9001\u6210\u529f ({url[:30]}...)")
-        except Exception as e: print(f"  [WARN] Bark({url[:30]}...): {e}")
+        if len("\n".join(cur + [s])) > 2000:
+            chunks.append("\n".join(cur))
+            cur = [s]
+        else:
+            cur.append(s)
+    if cur: chunks.append("\n".join(cur))
+    return chunks[:3]
 
 def main():
     import argparse
