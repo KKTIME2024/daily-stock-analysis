@@ -16,10 +16,10 @@ jobs:
       - uses: astral-sh/setup-uv@v5
 
       - name: Install dependencies
-        run: uv pip install --system efinance openai python-dotenv ddgs
+        run: uv pip install efinance openai python-dotenv ddgs
 
       - name: Run analysis
         env:
           LLM_OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CUSTOM_WEBHOOK_URLS: ${{ secrets.CUSTOM_WEBHOOK_URLS }}
-        run: python dev/run.py
+        run: uv run python dev/run.py
