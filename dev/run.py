@@ -9,7 +9,7 @@ LLM：DeepSeek（兼容 OpenAI API）
     python dev/run.py
     python dev/run.py --stocks 000002,002607,002373
 """
-import os, sys, time
+import os, sys, time, random
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -52,10 +52,19 @@ def _mcap(v):
     try: return f"{float(v)/1e8:.0f}\u4ebf"
     except: return str(v)
 
+def _retry(func, *args, tries=3, **kwargs):
+    for i in range(tries):
+        try:
+            time.sleep(random.uniform(0.5, 2.0))
+            return func(*args, **kwargs)
+        except Exception as e:
+            if i == tries - 1: raise
+            print(f"  [RETRY] {func.__name__} attempt {i+1} failed: {str(e)[:80]}")
+
 def fetch_index_quotes():
     result = {}
     try:
-        df = ef.stock.get_realtime_quotes(["\u6caa\u6df1\u7cfb\u5217\u6307\u6570"])
+        df = _retry(ef.stock.get_realtime_quotes, ["\u6caa\u6df1\u7cfb\u5217\u6307\u6570"])
         if df is None or df.empty: return result
         for _, row in df.iterrows():
             name = str(row.get("\u80a1\u7968\u540d\u79f0", ""))
@@ -69,7 +78,7 @@ def fetch_index_quotes():
 def fetch_sector_rankings(n=5):
     result = {"top": [], "bottom": []}
     try:
-        df = ef.stock.get_realtime_quotes(["\u884c\u4e1a\u677f\u5757"])
+        df = _retry(ef.stock.get_realtime_quotes, ["\u884c\u4e1a\u677f\u5757"])
         if df is None or df.empty: return result
         chg_col = "\u6da8\u8dcc\u5e45" if "\u6da8\u8dcc\u5e45" in df.columns else None
         name_col = "\u80a1\u7968\u540d\u79f0" if "\u80a1\u7968\u540d\u79f0" in df.columns else None
@@ -84,11 +93,11 @@ def fetch_sector_rankings(n=5):
     return result
 
 def fetch_stock_kline(code):
-    return ef.stock.get_quote_history(code, klt=101, fqt=1)
+    return _retry(ef.stock.get_quote_history, code, klt=101, fqt=1)
 
 def fetch_stock_fund_flow(code, days=5):
     try:
-        df = ef.stock.get_history_bill(code)
+        df = _retry(ef.stock.get_history_bill, code)
         if df is None or df.empty: return None
         result = []
         for i in range(min(days, len(df))):
@@ -109,14 +118,14 @@ def fetch_stock_fund_flow(code, days=5):
 
 def fetch_stock_base_info(code):
     try:
-        info = ef.stock.get_base_info(code)
+        info = _retry(ef.stock.get_base_info, code)
         if info is None or info.empty: return {}
         return info.to_dict()
     except: return {}
 
 def fetch_billboard():
     try:
-        df = ef.stock.get_daily_billboard()
+        df = _retry(ef.stock.get_daily_billboard)
         if df is None or df.empty: return []
         result = []
         for _, row in df.head(20).iterrows():
