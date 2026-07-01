@@ -1,12 +1,14 @@
-"""本地开发调试：多源数据获取 -> LLM 综合报告 -> 输出 txt + Bark 推送
+"""轻量级每日A股分析：efinance数据 + DDG新闻 + DeepSeek LLM → 7章报告 → Bark推送
 
 数据源：efinance（东方财富）
-新闻：DuckDuckGo 免费搜索
-LLM：DeepSeek（兼容 OpenAI API）
-推送：Bark（通过 CUSTOM_WEBHOOK_URLS 配置，支持多人）
+新闻：DuckDuckGo 免费搜索（事件触发规则）
+LLM：DeepSeek V3（兼容 OpenAI API）
+推送：Bark POST（CUSTOM_WEBHOOK_URLS，逗号分隔，支持多人）
+部署：Linux cron 双时段（09:25 盘前新闻 / 18:00 收盘分析）
 
 用法:
-    python dev/run.py
+    python dev/run.py                  # 收盘完整分析
+    python dev/run.py --mode pre       # 盘前新闻推送
     python dev/run.py --stocks 000002,002607,002373
 """
 import os, sys, time, random

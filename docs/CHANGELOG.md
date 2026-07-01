@@ -9,7 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-- [修复] API 异步批量分析共享概念板块排行缓存，避免同批多股重复拉取全市场概念排行。
+- [新功能] 新增 `dev/run.py` 轻量级本地分析脚本：efinance 数据 + DuckDuckGo 事件触发新闻搜索 + DeepSeek LLM → 7 章纯文本报告 → Bark POST 推送（支持多人）。
+- [新功能] 事件触发新闻检索：基于涨跌幅(>4%)、PB(<0.5)、量比(>1.5)、主力资金(>1亿)等规则自动生成搜索词。
+- [新功能] 双时段 cron 部署：09:25 盘前新闻推送（--mode pre），18:00 收盘完整分析。
+- [新功能] Bark POST 分块推送：按 4000 字节自动切块，最大 4 条，带序号标识。
+- [改进] 个股分析维度扩展：52 周高低、近 3 日主力流向、近 5 日累计、量比、净利率/净利润。
+- [改进] 报告格式去 Markdown 表格，改为纯文本，优化手机 Bark 阅读体验。
+- [chore] 旧 `00-daily-analysis.yml` workflow 停用，新增 `dev-daily-analysis.yml`（仅保留手动触发）。
+- [修复] \u4e1c\u65b9\u8d22\u5bcc K\u7ebf\u63a5\u53e3\u5076\u53d1\u65ad\u8fde\u4e0d\u518d\u5bfc\u81f4\u6574\u4e2a\u811a\u672c\u5d29\u6e83\u3002
 - [文档] 补齐概念板块排行字段契约与通知报告行业/概念类型列展示说明。
 - [新功能] #1742 新增信号归因分析功能（dashboard.signal_attribution），解释推荐理由的构成（技术指标、新闻舆情、基本面、市场环境的贡献度，以及最强看多/看空信号）。支持默认通知报告和 Jinja2 模板渲染，包含中英文国际化标签。归一化函数在 _parse_response() 和 parse_dashboard_json() 中显式调用，确保有效非零贡献度归一化到 100，all-zero 保留为 0（表示无有效信号）。
 - [改进] Agent 路径同步：更新 executor.py 和 decision_agent.py 的 prompt，确保 agent/multi-agent 分析时也生成 signal_attribution 字段。
