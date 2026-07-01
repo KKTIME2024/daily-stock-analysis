@@ -483,6 +483,7 @@ def send_bark(title, body):
         print("  [SKIP] CUSTOM_WEBHOOK_URLS \u672a\u914d\u7f6e"); return
     import urllib.request, json
     parts = _split_bark_body(body)
+    ok = 0
     for i, part in enumerate(parts):
         t = title if i == 0 else f"{title} ({i+1}/{len(parts)})"
         for raw in urls.split(","):
@@ -494,13 +495,14 @@ def send_bark(title, body):
                 req = urllib.request.Request("https://api.day.app/push", data=data,
                     headers={"Content-Type": "application/json"})
                 urllib.request.urlopen(req, timeout=10)
+                ok += 1
             except Exception as e:
-                print(f"  [WARN] Bark part{i}({key[:12]}): {e}")
-    print(f"  [OK] Bark \u63a8\u9001 {len(parts)}\u6761")
+                print(f"  [WARN] Bark ch{i}({key[:12]}): {e}")
+    print(f"  [OK] Bark \u63a8\u9001 {ok}/{len(parts)*len(urls.split(','))}")
 
 def _split_bark_body(body):
     lines, chunks, cur = body.split("\n"), [], []
-    limit = 7000
+    limit = 5000
     for line in lines:
         s = line.strip()
         if not s: continue
@@ -536,10 +538,13 @@ def main():
     if args.mode == "pre":
         for code in stock_list:
             sd = {"name": code, "signals": {}, "fund_flow": None, "base_info": {}}
-            time.sleep(0.5)
-            df = fetch_stock_kline(code)
-            if df is not None and len(df) > 0:
-                sd["name"] = str(df.iloc[-1].get("\u80a1\u7968\u540d\u79f0", code))
+            try:
+                time.sleep(0.5)
+                df = fetch_stock_kline(code)
+                if df is not None and len(df) > 0:
+                    sd["name"] = str(df.iloc[-1].get("\u80a1\u7968\u540d\u79f0", code))
+            except Exception as e:
+                print(f"  [WARN] {code}: {e}")
             market_data["stocks"][code] = sd
     else:
         print("\n[\u6307\u6570]"); time.sleep(0.5)
@@ -558,28 +563,30 @@ def main():
         for code in stock_list:
             print(f"\n[{code}]")
             sd = {"name": code, "signals": {}, "fund_flow": None, "base_info": {}}
+            try:
+                time.sleep(0.5)
+                df = fetch_stock_kline(code)
+                if df is not None and len(df) > 0:
+                    sd["name"] = str(df.iloc[-1].get("\u80a1\u7968\u540d\u79f0", code))
+                    sd["signals"] = compute_signals(df)
+                    print(f"  {sd['name']}: {sd['signals'].get('close','?')} "
+                          f"{_arrow(sd['signals'].get('chg_pct',0))}{sd['signals'].get('chg_pct',0):.2f}%")
+                else: print(f"  [WARN] K\u7ebf\u4e3a\u7a7a")
 
-            time.sleep(0.5)
-            df = fetch_stock_kline(code)
-            if df is not None and len(df) > 0:
-                sd["name"] = str(df.iloc[-1].get("\u80a1\u7968\u540d\u79f0", code))
-                sd["signals"] = compute_signals(df)
-                print(f"  {sd['name']}: {sd['signals'].get('close','?')} "
-                      f"{_arrow(sd['signals'].get('chg_pct',0))}{sd['signals'].get('chg_pct',0):.2f}%")
-            else: print(f"  [WARN] K\u7ebf\u4e3a\u7a7a")
+                time.sleep(0.5)
+                fund = fetch_stock_fund_flow(code, days=5)
+                if fund:
+                    sd["fund_flow"] = fund
+                    print(f"  \u4e3b\u529b: {_money(fund[0]['main_net'])} (\u8fd15\u65e5)")
+                else: print(f"  \u8d44\u91d1\u6d41: \u672a\u83b7\u53d6")
 
-            time.sleep(0.5)
-            fund = fetch_stock_fund_flow(code, days=5)
-            if fund:
-                sd["fund_flow"] = fund
-                print(f"  \u4e3b\u529b: {_money(fund[0]['main_net'])} (\u8fd15\u65e5)")
-            else: print(f"  \u8d44\u91d1\u6d41: \u672a\u83b7\u53d6")
-
-            time.sleep(0.5)
-            base = fetch_stock_base_info(code)
-            if base:
-                sd["base_info"] = base
-                print(f"  PE:{base.get('\u5e02\u76c8\u7387(\u52a8)','?')} PB:{base.get('\u5e02\u51c0\u7387','?')} {base.get('\u6240\u5904\u884c\u4e1a','?')}")
+                time.sleep(0.5)
+                base = fetch_stock_base_info(code)
+                if base:
+                    sd["base_info"] = base
+                    print(f"  PE:{base.get('\u5e02\u76c8\u7387(\u52a8)','?')} PB:{base.get('\u5e02\u51c0\u7387','?')} {base.get('\u6240\u5904\u884c\u4e1a','?')}")
+            except Exception as e:
+                print(f"  [ERROR] \u83b7\u53d6\u5931\u8d25({code}): {e}")
 
             market_data["stocks"][code] = sd
 
