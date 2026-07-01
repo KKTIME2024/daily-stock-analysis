@@ -311,7 +311,12 @@ def _stock_section(name, code, sig, fund_flow, base):
 def format_report(market_data, llm_output, usage):
     dt = datetime.now().strftime("%m-%d %H:%M")
     names = "\u3001".join(sd["name"] for sd in market_data["stocks"].values())
-    lines = [f"\U0001f4c8 A\u80a1\u5206\u6790  {dt}", f"\u6807\u7684: {names}", ""]
+    cost_str = ""
+    if usage:
+        in_tok = usage.prompt_tokens; out_tok = usage.completion_tokens
+        cost = in_tok / 1e6 * LLM_PRICE_IN + out_tok / 1e6 * LLM_PRICE_OUT
+        cost_str = f"  \u26a1{in_tok}\u2192{out_tok}tok \u00a5{cost:.4f}"
+    lines = [f"\U0001f4c8 A\u80a1\u5206\u6790  {dt}{cost_str}", f"\u6807\u7684: {names}", ""]
 
     indices = market_data["indices"]
     if indices:
@@ -380,11 +385,7 @@ def format_report(market_data, llm_output, usage):
     lines.append("")
 
     cost_str = ""
-    if usage:
-        in_tok = usage.prompt_tokens; out_tok = usage.completion_tokens
-        cost = in_tok / 1e6 * LLM_PRICE_IN + out_tok / 1e6 * LLM_PRICE_OUT
-        cost_str = f"  \u26a1 DeepSeek: {in_tok}\u2192{out_tok} tokens  \u00a5{cost:.4f}"
-    lines.append(f"\u751f\u6210\u65f6\u95f4: {dt}{cost_str}")
+    lines.append(f"\u751f\u6210\u65f6\u95f4: {dt}")
 
     return "\n".join(lines)
 
@@ -502,7 +503,7 @@ def send_bark(title, body):
 
 def _split_bark_body(body):
     lines, chunks, cur = body.split("\n"), [], []
-    limit = 5000
+    limit = 4000
     for line in lines:
         s = line.strip()
         if not s: continue
